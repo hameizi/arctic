@@ -92,6 +92,22 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
     this.tableLoader = tableLoader;
   }
 
+  public ArcticDynamicSource(String tableName,
+                             ScanTableSource arcticDynamicSource,
+                             ArcticTable arcticTable,
+                             Map<String, String> properties,
+                             ArcticTableLoader tableLoader,
+                             int[] projectFields,
+                             List<Expression> filters) {
+    this.tableName = tableName;
+    this.arcticDynamicSource = arcticDynamicSource;
+    this.arcticTable = arcticTable;
+    this.properties = properties;
+    this.tableLoader = tableLoader;
+    this.projectFields = projectFields;
+    this.filters = filters;
+  }
+
   @Override
   public ChangelogMode getChangelogMode() {
     return arcticDynamicSource.getChangelogMode();
@@ -108,7 +124,9 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
 
   @Override
   public DynamicTableSource copy() {
-    return new ArcticDynamicSource(tableName, arcticDynamicSource, arcticTable, properties, tableLoader);
+    return
+        new ArcticDynamicSource(
+            tableName, arcticDynamicSource, arcticTable, properties, tableLoader, projectFields, filters);
   }
 
   @Override
