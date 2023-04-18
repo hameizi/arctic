@@ -184,6 +184,7 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
 
     Schema projectedSchema;
     if (projectFields == null) {
+      LOG.info("projectFields is null.");
       projectedSchema = arcticTable.schema();
     } else {
       List<String> projectedFieldNames =
@@ -194,6 +195,10 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
                       arcticTable.schema().columns().get(index).name())
               .collect(Collectors.toList());
       projectedSchema = SchemaUtil.convertFieldsToSchema(arcticTableSchema, projectedFieldNames);
+      LOG.info(
+          "projected schema {}.\n table schema {}.",
+          projectedSchema,
+          arcticTable.schema());
     }
 
     List<String> joinKeyNames =
