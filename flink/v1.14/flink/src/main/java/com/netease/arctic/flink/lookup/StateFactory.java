@@ -21,16 +21,18 @@ package com.netease.arctic.flink.lookup;
 import com.netease.arctic.utils.map.RocksDBBackend;
 import org.apache.flink.configuration.Configuration;
 import org.rocksdb.ColumnFamilyOptions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import static com.netease.arctic.flink.table.descriptors.ArcticValidator.ROCKSDB_AUTO_COMPACTIONS;
 import static com.netease.arctic.flink.table.descriptors.ArcticValidator.ROCKSDB_WRITING_THREADS;
 
 public class StateFactory {
+  private static final Logger LOG = LoggerFactory.getLogger(StateFactory.class);
 
   private final RocksDBBackend db;
 
   public StateFactory(String dbPath) {
-    // todo optimize the rocksDB through rocksdb options
     this.db = RocksDBBackend.getOrCreateInstance(dbPath);
   }
 
@@ -41,9 +43,8 @@ public class StateFactory {
       BinaryRowDataSerializerWrapper valueSerializer,
       Configuration config) {
     ColumnFamilyOptions columnFamilyOptions = new ColumnFamilyOptions();
-    if (!config.get(ROCKSDB_AUTO_COMPACTIONS)) {
-      columnFamilyOptions.disableAutoCompactions();
-    }
+    configColumnFamilyOption(config, columnFamilyOptions);
+
     db.addColumnFamily(columnFamilyName, columnFamilyOptions);
     return
         new RocksDBRecordState(
@@ -63,9 +64,8 @@ public class StateFactory {
       BinaryRowDataSerializerWrapper valueSerializer,
       Configuration config) {
     ColumnFamilyOptions columnFamilyOptions = new ColumnFamilyOptions();
-    if (!config.get(ROCKSDB_AUTO_COMPACTIONS)) {
-      columnFamilyOptions.disableAutoCompactions();
-    }
+    configColumnFamilyOption(config, columnFamilyOptions);
+
     db.addColumnFamily(columnFamilyName, columnFamilyOptions);
     return new RocksDBSetState(
         db,
@@ -75,5 +75,13 @@ public class StateFactory {
         elementSerialization,
         valueSerializer,
         config.getInteger(ROCKSDB_WRITING_THREADS));
+  }
+
+
+  private void configColumnFamilyOption(Configuration config, ColumnFamilyOptions columnFamilyOptions) {
+    if (!config.get(ROCKSDB_AUTO_COMPACTIONS)) {
+      columnFamilyOptions.setDisableAutoCompactions(true);
+      LOG.info("set db options[disable_auto_compactions={}]", true);
+    }
   }
 }

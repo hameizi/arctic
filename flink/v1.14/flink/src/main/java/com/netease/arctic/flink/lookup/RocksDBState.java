@@ -19,6 +19,7 @@
 package com.netease.arctic.flink.lookup;
 
 import com.ibm.icu.util.ByteArrayWrapper;
+import com.netease.arctic.ArcticIOException;
 import com.netease.arctic.utils.map.RocksDBBackend;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.shaded.guava30.com.google.common.cache.Cache;
@@ -27,10 +28,13 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.FlinkRuntimeException;
 import org.rocksdb.ColumnFamilyHandle;
+import org.rocksdb.MutableColumnFamilyOptions;
+import org.rocksdb.RocksDBException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -43,7 +47,6 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-
 
 public abstract class RocksDBState<V> {
   private static final Logger LOG = LoggerFactory.getLogger(RocksDBState.class);
@@ -180,6 +183,21 @@ public abstract class RocksDBState<V> {
       rocksDBRecordQueue.clear();
       rocksDBRecordQueue = null;
     }
+  }
+
+  public void initializationCompleted() {
+    try {
+      rocksDB.rocksDB.enableAutoCompaction(Collections.singletonList(columnFamilyHandle));
+      MutableColumnFamilyOptions mutableColumnFamilyOptions =
+          MutableColumnFamilyOptions.builder()
+              .setDisableAutoCompactions(false)
+              .build();
+      rocksDB.setOptions(columnFamilyHandle, mutableColumnFamilyOptions);
+    } catch (RocksDBException e) {
+      throw new ArcticIOException(e);
+    }
+
+    LOG.info("set db options[disable_auto_compactions={}]", false);
   }
 
   /**

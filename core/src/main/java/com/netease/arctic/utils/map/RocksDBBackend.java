@@ -29,6 +29,7 @@ import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.DBOptions;
 import org.rocksdb.InfoLogLevel;
+import org.rocksdb.MutableColumnFamilyOptions;
 import org.rocksdb.Options;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
@@ -86,7 +87,7 @@ public class RocksDBBackend {
 
   private Map<String, ColumnFamilyHandle> handlesMap = new HashMap<>();
   private Map<String, ColumnFamilyDescriptor> descriptorMap = new HashMap<>();
-  private RocksDB rocksDB;
+  public RocksDB rocksDB;
   private boolean closed = false;
   private final String rocksDBBasePath;
   private long totalBytesWritten;
@@ -425,6 +426,17 @@ public class RocksDBBackend {
   private byte[] payload(byte[] value) {
     totalBytesWritten += value.length;
     return value;
+  }
+
+  public void setOptions(ColumnFamilyHandle columnFamilyHandle,
+                         MutableColumnFamilyOptions mutableColumnFamilyOptions) {
+    Validate.notNull(columnFamilyHandle);
+    Validate.notNull(mutableColumnFamilyOptions);
+    try {
+      rocksDB.setOptions(columnFamilyHandle, mutableColumnFamilyOptions);
+    } catch (RocksDBException e) {
+      throw new ArcticIOException(e);
+    }
   }
 
   /**

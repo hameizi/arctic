@@ -109,6 +109,7 @@ public class UniqueIndexTable implements KVTable {
     LOG.info("Waiting for Record State initialization");
     recordState.waitWriteRocksDBDone();
     LOG.info("The concurrent threads have finished writing data into the Record State.");
+    recordState.initializationCompleted();
   }
 
   @Override

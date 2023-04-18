@@ -122,6 +122,7 @@ public class SecondaryIndexTable extends UniqueIndexTable {
     LOG.info("Waiting for Set State initialization");
     setState.waitWriteRocksDBDone();
     LOG.info("The concurrent threads have finished writing data into the Set State.");
+    setState.initializationCompleted();
   }
 
   @Override

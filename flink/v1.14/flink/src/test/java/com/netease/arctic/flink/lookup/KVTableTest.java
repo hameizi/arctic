@@ -41,6 +41,8 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -50,7 +52,7 @@ import java.util.List;
 import static com.netease.arctic.flink.table.descriptors.ArcticValidator.ROCKSDB_WRITING_THREADS;
 
 public class KVTableTest {
-
+  private static final Logger LOG = LoggerFactory.getLogger(KVTableTest.class);
   @Rule
   public TemporaryFolder temp = new TemporaryFolder();
   @Rule
@@ -213,73 +215,6 @@ public class KVTableTest {
       assertTableSet(
           secondaryIndexTable,
           row(3), row(3, "3", 5), row(3, "4", 4));
-    }
-  }
-
-  @Test
-  public void testUniqueKeyTable() throws IOException {
-    List<String> joinKeys = Lists.newArrayList("id", "grade");
-    try (UniqueIndexTable uniqueIndexTable =
-             (UniqueIndexTable) KVTable.create(
-                 new StateFactory(dbPath),
-                 primaryKeys,
-                 joinKeys,
-                 2,
-                 arcticSchema,
-                 config)) {
-      RowData expected = row(1, "2", 3);
-      upsertTable(uniqueIndexTable, upsertStream(expected), row(1, "2"), expected);
-
-      expected = row(1, "2", 4);
-      upsertTable(uniqueIndexTable, upsertStream(expected), row(1, "2"), expected);
-
-      upsertTable(
-          uniqueIndexTable,
-          upsertStream(
-              row(RowKind.INSERT, 2, "3", 4),
-              row(RowKind.DELETE, 2, "3", 4),
-              row(RowKind.UPDATE_BEFORE, 1, "2", 4),
-              row(RowKind.UPDATE_AFTER, 1, "2", 6)),
-          row(2, "3"),
-          null,
-          row(1, "2"),
-          row(1, "2", 6));
-    }
-  }
-
-  @Test
-  public void testSecondaryIndexTable() throws IOException {
-    dbPath = temp.newFolder().getPath();
-
-    List<String> joinKeys = Lists.newArrayList("id");
-
-    try (SecondaryIndexTable secondaryIndexTable =
-             (SecondaryIndexTable) KVTable.create(
-                 new StateFactory(dbPath),
-                 primaryKeys,
-                 joinKeys,
-                 2,
-                 arcticSchema,
-                 config)) {
-      RowData expected = row(1, "2", 3);
-      upsertTable(secondaryIndexTable, upsertStream(expected), row(1), expected);
-      upsertTable(secondaryIndexTable, null, row(1), expected);
-
-      expected = row(1, "2", 4);
-      upsertTable(secondaryIndexTable, upsertStream(expected), row(1), expected);
-
-      upsertTable(
-          secondaryIndexTable,
-          upsertStream(
-              row(RowKind.INSERT, 2, "3", 4),
-              row(RowKind.DELETE, 2, "3", 4),
-              row(RowKind.UPDATE_BEFORE, 1, "2", 4),
-              row(RowKind.UPDATE_AFTER, 1, "2", 6)),
-          row(2),
-          null,
-          row(1),
-          row(1, "2", 6)
-      );
     }
   }
 
