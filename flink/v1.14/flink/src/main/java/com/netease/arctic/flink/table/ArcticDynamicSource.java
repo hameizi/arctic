@@ -223,7 +223,7 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
         Arrays
             .stream(joinKeys)
             .mapToObj(
-                index -> arcticTableSchema.columns().get(index).name())
+                index -> projectedSchema.columns().get(index).name())
             .collect(Collectors.toList());
 
     Configuration config = new Configuration();
