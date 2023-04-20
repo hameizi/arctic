@@ -120,8 +120,8 @@ public class ArcticLookupFunction extends TableFunction<RowData> {
             ),
             new RowDataReaderFunction(
                 new Configuration(),
-                projectSchema,
                 arcticTable.schema(),
+                projectSchema,
                 arcticTable.asKeyedTable().primaryKeySpec(),
                 null,
                 true,
