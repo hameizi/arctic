@@ -26,6 +26,7 @@ import org.apache.iceberg.types.Types;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
@@ -34,7 +35,7 @@ import java.util.stream.Collectors;
 public class SecondaryIndexTable extends UniqueIndexTable {
   private static final long serialVersionUID = 1L;
   private final int[] secondaryKeyIndexMapping;
-  private final RocksDBSetState setState;
+  private final RocksDBSetSpillState setState;
 
   public SecondaryIndexTable(
       StateFactory stateFactory,
@@ -67,7 +68,7 @@ public class SecondaryIndexTable extends UniqueIndexTable {
 
   @Override
   public List<RowData> get(RowData key) throws IOException {
-    List<byte[]> uniqueKeys = setState.get(key);
+    Collection<byte[]> uniqueKeys = setState.get(key);
     if (!uniqueKeys.isEmpty()) {
       List<RowData> result = new ArrayList<>(uniqueKeys.size());
       for (byte[] uniqueKey : uniqueKeys) {
@@ -107,6 +108,8 @@ public class SecondaryIndexTable extends UniqueIndexTable {
       recordState.batchWrite(value.getRowKind(), uniqueKeyBytes, value);
       setState.batchWrite(joinKey, uniqueKeyBytes);
     }
+    recordState.checkConcurrentFailed();
+    setState.checkConcurrentFailed();
     recordState.flush();
     setState.flush();
   }

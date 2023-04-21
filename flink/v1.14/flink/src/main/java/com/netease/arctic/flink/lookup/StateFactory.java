@@ -21,6 +21,7 @@ package com.netease.arctic.flink.lookup;
 import com.netease.arctic.utils.map.RocksDBBackend;
 import org.apache.flink.configuration.Configuration;
 import org.rocksdb.ColumnFamilyOptions;
+import org.rocksdb.CompressionType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -56,7 +57,7 @@ public class StateFactory {
             config.getInteger(ROCKSDB_WRITING_THREADS));
   }
 
-  public RocksDBSetState createSetState(
+  public RocksDBSetSpillState createSetState(
       String columnFamilyName,
       long lruMaximumSize,
       BinaryRowDataSerializerWrapper keySerialization,
@@ -65,9 +66,11 @@ public class StateFactory {
       Configuration config) {
     ColumnFamilyOptions columnFamilyOptions = new ColumnFamilyOptions();
     configColumnFamilyOption(config, columnFamilyOptions);
+    columnFamilyOptions.setCompressionType(CompressionType.NO_COMPRESSION);
 
     db.addColumnFamily(columnFamilyName, columnFamilyOptions);
-    return new RocksDBSetState(
+
+    return new RocksDBSetSpillState(
         db,
         columnFamilyName,
         lruMaximumSize,

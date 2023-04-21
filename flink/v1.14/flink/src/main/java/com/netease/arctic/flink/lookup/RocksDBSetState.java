@@ -18,7 +18,6 @@
 
 package com.netease.arctic.flink.lookup;
 
-import com.ibm.icu.util.ByteArrayWrapper;
 import com.netease.arctic.log.Bytes;
 import com.netease.arctic.utils.map.RocksDBBackend;
 import org.apache.flink.table.data.RowData;
@@ -52,7 +51,8 @@ public class RocksDBSetState extends RocksDBState<List<byte[]>> {
         lruMaximumSize,
         elementSerialization,
         valueSerializer,
-        writeRocksDBThreadNum);
+        writeRocksDBThreadNum,
+        false);
     this.keySerializer = keySerialization;
   }
 

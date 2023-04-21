@@ -18,7 +18,6 @@
 
 package com.netease.arctic.flink.lookup;
 
-import com.ibm.icu.util.ByteArrayWrapper;
 import com.netease.arctic.utils.map.RocksDBBackend;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
@@ -43,7 +42,14 @@ public class RocksDBRecordState extends RocksDBState<byte[]> {
       BinaryRowDataSerializerWrapper keySerializer,
       BinaryRowDataSerializerWrapper valueSerializer,
       int writeRocksDBThreadNum) {
-    super(rocksDB, columnFamilyName, lruMaximumSize, keySerializer, valueSerializer, writeRocksDBThreadNum);
+    super(
+        rocksDB,
+        columnFamilyName,
+        lruMaximumSize,
+        keySerializer,
+        valueSerializer,
+        writeRocksDBThreadNum,
+        false);
   }
 
   /**
@@ -60,7 +66,7 @@ public class RocksDBRecordState extends RocksDBState<byte[]> {
   public void batchWrite(RowKind rowKind, byte[] keyBytes, RowData value) throws IOException {
     byte[] valueBytes = serializeValue(value);
     RocksDBRecord.OpType opType = convertToOpType(rowKind);
-    rocksDBRecordQueue.add(RocksDBRecord.of(opType, keyBytes, valueBytes));
+    putIntoQueue(RocksDBRecord.of(opType, keyBytes, valueBytes));
   }
 
   /**
@@ -104,12 +110,6 @@ public class RocksDBRecordState extends RocksDBState<byte[]> {
     Preconditions.checkNotNull(value);
 
     byte[] valueBytes = serializeValue(value);
-    // todo
-    if (lruSize == 10001) {
-      // ignore putting data into cache
-      return;
-    }
-
     rocksDB.put(columnFamilyHandle, keyBytes, valueBytes);
 
     // Speed up the initialization process of Lookup Join Function

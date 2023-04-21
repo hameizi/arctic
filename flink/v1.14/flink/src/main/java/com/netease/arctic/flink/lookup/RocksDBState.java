@@ -18,7 +18,6 @@
 
 package com.netease.arctic.flink.lookup;
 
-import com.ibm.icu.util.ByteArrayWrapper;
 import com.netease.arctic.ArcticIOException;
 import com.netease.arctic.utils.map.RocksDBBackend;
 import org.apache.flink.annotation.VisibleForTesting;
@@ -27,6 +26,9 @@ import org.apache.flink.shaded.guava30.com.google.common.cache.CacheBuilder;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.FlinkRuntimeException;
+import org.apache.flink.util.Preconditions;
+import org.apache.iceberg.relocated.com.google.common.collect.Maps;
+import org.apache.iceberg.relocated.com.google.common.collect.Sets;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.MutableColumnFamilyOptions;
 import org.rocksdb.RocksDBException;
@@ -36,7 +38,9 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -51,6 +55,8 @@ import java.util.stream.IntStream;
 public abstract class RocksDBState<V> {
   private static final Logger LOG = LoggerFactory.getLogger(RocksDBState.class);
   protected RocksDBBackend rocksDB;
+  protected Map<ByteArrayWrapper, Set<ByteArrayWrapper>> secondaryIndexMap;
+  protected final boolean secondaryIndexMemoryMapEnabled;
 
   protected Cache<ByteArrayWrapper, V> guavaCache;
 
@@ -62,6 +68,7 @@ public abstract class RocksDBState<V> {
   private ExecutorService writeRocksDBService;
   private final AtomicBoolean initialized = new AtomicBoolean(false);
   protected Queue<RocksDBRecord> rocksDBRecordQueue;
+  private final long maxQueueSize = 5000000;
 
   protected long lruSize;
   private final int writeRocksDBThreadNum;
@@ -73,7 +80,8 @@ public abstract class RocksDBState<V> {
       long lruMaximumSize,
       BinaryRowDataSerializerWrapper keySerializer,
       BinaryRowDataSerializerWrapper valueSerializer,
-      int writeRocksDBThreadNum) {
+      int writeRocksDBThreadNum,
+      boolean secondaryIndexMemoryMapEnabled) {
     this.rocksDB = rocksDB;
     this.guavaCache = CacheBuilder.newBuilder().maximumSize(lruMaximumSize).build();
     this.columnFamilyName = columnFamilyName;
@@ -82,18 +90,26 @@ public abstract class RocksDBState<V> {
     this.columnFamilyHandle = rocksDB.getColumnFamilyHandle(columnFamilyName);
     this.lruSize = lruMaximumSize;
     this.writeRocksDBThreadNum = writeRocksDBThreadNum;
+    this.secondaryIndexMemoryMapEnabled = secondaryIndexMemoryMapEnabled;
   }
 
   public void open() {
     writeRocksDBService = Executors.newFixedThreadPool(writeRocksDBThreadNum);
+    if (secondaryIndexMemoryMapEnabled) {
+      secondaryIndexMap = Maps.newConcurrentMap();
+//          new SecondarySpillableMap<>(
+//          2 * 1024 * 1024 * 1024L,
+//          rocksDB.getRocksDBBasePath());
+    }
     rocksDBRecordQueue = new ConcurrentLinkedQueue<>();
     writeRocksDBThreadFutures =
         IntStream.range(0, writeRocksDBThreadNum).mapToObj(value ->
                 writeRocksDBService.submit(
-                    new WriteRocksDBTask(String.format("writing-rocksDB-cf_%s-thread-%d", columnFamilyName, value))))
+                    new WriteRocksDBTask(
+                        String.format("writing-rocksDB-cf_%s-thread-%d", columnFamilyName, value),
+                        secondaryIndexMemoryMapEnabled)))
             .collect(Collectors.toList());
   }
-
 
   @VisibleForTesting
   public byte[] serializeKey(RowData key) throws IOException {
@@ -119,6 +135,18 @@ public abstract class RocksDBState<V> {
 
   protected ByteArrayWrapper wrap(byte[] bytes) {
     return new ByteArrayWrapper(bytes, bytes.length);
+  }
+
+  protected void putIntoQueue(RocksDBRecord rocksDBRecord) {
+    Preconditions.checkNotNull(rocksDBRecord);
+//    try {
+//      while (rocksDBRecordQueue.size() >= maxQueueSize) {
+//        Thread.sleep(5);
+//      }
+    rocksDBRecordQueue.add(rocksDBRecord);
+//    } catch (InterruptedException e) {
+//      throw new FlinkRuntimeException(e);
+//    }
   }
 
   public abstract void flush();
@@ -153,7 +181,6 @@ public abstract class RocksDBState<V> {
   public boolean initialized() {
     return initialized.get();
   }
-
 
   protected RocksDBRecord.OpType convertToOpType(RowKind rowKind) {
     switch (rowKind) {
@@ -200,6 +227,15 @@ public abstract class RocksDBState<V> {
     LOG.info("set db options[disable_auto_compactions={}]", false);
   }
 
+  private final ThreadLocal<Throwable> writingThreadException = new ThreadLocal<>();
+
+  protected void checkConcurrentFailed() {
+    if (writingThreadException.get() != null) {
+      LOG.error("Check concurrent writing threads.", writingThreadException.get());
+      throw new FlinkRuntimeException(writingThreadException.get());
+    }
+  }
+
   /**
    * This task is running during the initialization phase to write data{@link RocksDBRecord} to RocksDB.
    *
@@ -210,30 +246,81 @@ public abstract class RocksDBState<V> {
   class WriteRocksDBTask implements Runnable {
 
     private final String name;
+    private final boolean secondaryIndexMemoryMapEnabled;
 
-    public WriteRocksDBTask(String name) {
+    public WriteRocksDBTask(String name, boolean secondaryIndexMemoryMapEnabled) {
       this.name = name;
+      this.secondaryIndexMemoryMapEnabled = secondaryIndexMemoryMapEnabled;
     }
 
     @Override
     public void run() {
       LOG.info("{} starting.", name);
-      while (!initialized.get()) {
-        RocksDBRecord record = rocksDBRecordQueue.poll();
-        if (record != null) {
-          switch (record.opType()) {
-            case PUT_BYTES:
-              rocksDB.put(columnFamilyHandle, record.keyBytes(), record.valueBytes());
-              break;
-            case DELETE_BYTES:
-              rocksDB.delete(columnFamilyName, record.keyBytes());
-              break;
-            default:
-              throw new IllegalArgumentException(String.format("Not support this OpType %s", record.opType()));
+      try {
+        while (!initialized.get()) {
+          RocksDBRecord record = rocksDBRecordQueue.poll();
+          if (record != null) {
+            switch (record.opType()) {
+              case PUT_BYTES:
+                put(record);
+                break;
+              case DELETE_BYTES:
+                delete(record);
+                break;
+              default:
+                throw new IllegalArgumentException(String.format("Not support this OpType %s", record.opType()));
+            }
           }
         }
+      } catch (Throwable e) {
+        LOG.error("writing failed:", e);
+        writingThreadException.set(e);
       }
       LOG.info("{} stopping.", name);
     }
+
+    private void delete(RocksDBRecord record) {
+      if (secondaryIndexMemoryMapEnabled) {
+        deleteSecondaryMap(record.keyBytes(), record.valueBytes());
+      } else {
+        rocksDB.delete(columnFamilyName, record.keyBytes());
+      }
+    }
+
+    private void put(RocksDBRecord record) {
+      if (secondaryIndexMemoryMapEnabled) {
+        putSecondaryMap(record.keyBytes(), record.valueBytes());
+      } else {
+        rocksDB.put(columnFamilyHandle, record.keyBytes(), record.valueBytes());
+      }
+    }
+  }
+
+  void putSecondaryMap(byte[] key, byte[] value) {
+    ByteArrayWrapper keyWrap = wrap(key);
+    ByteArrayWrapper valueWrap = wrap(value);
+
+    secondaryIndexMap.compute(keyWrap, (keyWrapper, oldSet) -> {
+      if (oldSet == null) {
+        oldSet = Sets.newHashSet();
+      }
+      oldSet.add(valueWrap);
+      return oldSet;
+    });
+  }
+
+  void deleteSecondaryMap(byte[] key, byte[] value) {
+    ByteArrayWrapper keyWrap = wrap(key);
+    ByteArrayWrapper valueWrap = wrap(value);
+    secondaryIndexMap.compute(keyWrap, (keyWrapper, oldSet) -> {
+      if (oldSet == null) {
+        return null;
+      }
+      oldSet.remove(valueWrap);
+      if (oldSet.isEmpty()) {
+        return null;
+      }
+      return oldSet;
+    });
   }
 }
