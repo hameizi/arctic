@@ -49,6 +49,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -73,6 +74,7 @@ public abstract class RocksDBState<V> {
   protected long lruSize;
   private final int writeRocksDBThreadNum;
   private List<Future<?>> writeRocksDBThreadFutures;
+  private final AtomicReference<Throwable> writingThreadException = new AtomicReference<>();
 
   public RocksDBState(
       RocksDBBackend rocksDB,
@@ -226,8 +228,6 @@ public abstract class RocksDBState<V> {
 
     LOG.info("set db options[disable_auto_compactions={}]", false);
   }
-
-  private final ThreadLocal<Throwable> writingThreadException = new ThreadLocal<>();
 
   protected void checkConcurrentFailed() {
     if (writingThreadException.get() != null) {
