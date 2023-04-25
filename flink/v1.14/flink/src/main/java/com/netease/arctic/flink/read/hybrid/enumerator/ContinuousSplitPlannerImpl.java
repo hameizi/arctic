@@ -90,17 +90,18 @@ public class ContinuousSplitPlannerImpl implements ContinuousSplitPlanner {
     long fromChangeSnapshotId = lastPosition.changeSnapshotId();
     Snapshot changeSnapshot = table.changeTable().currentSnapshot();
     if (changeSnapshot != null && changeSnapshot.snapshotId() != fromChangeSnapshotId) {
-      long snapshotId = changeSnapshot.snapshotId();
-      TableEntriesScan entriesScan = TableEntriesScan.builder(table.changeTable())
-          .useSnapshot(snapshotId)
-          .includeFileContent(FileContent.DATA)
-          .build();
-
       Long fromSequence = null;
       if (fromChangeSnapshotId != Long.MIN_VALUE) {
         Snapshot snapshot = table.changeTable().snapshot(fromChangeSnapshotId);
         fromSequence = snapshot.sequenceNumber();
       }
+
+      long snapshotId = changeSnapshot.snapshotId();
+      TableEntriesScan entriesScan = TableEntriesScan.builder(table.changeTable())
+          .useSnapshot(snapshotId)
+          .includeFileContent(FileContent.DATA)
+          .fromSequence(fromSequence)
+          .build();
 
       List<ArcticSplit> arcticChangeSplit =
           planChangeTable(entriesScan, fromSequence, table.changeTable().spec(), splitCount);

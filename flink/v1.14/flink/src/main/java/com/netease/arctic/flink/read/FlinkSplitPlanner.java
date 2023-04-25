@@ -36,6 +36,8 @@ import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -55,6 +57,8 @@ import java.util.stream.Collectors;
  * An util class that plans arctic table(base and change) or just plans change table. invoked by arctic enumerator.
  */
 public class FlinkSplitPlanner {
+  private static final Logger LOG = LoggerFactory.getLogger(FlinkSplitPlanner.class);
+
   private FlinkSplitPlanner() {
   }
 
@@ -179,12 +183,16 @@ public class FlinkSplitPlanner {
                                               Long fromSequence) {
       try (CloseableIterator<IcebergFileEntry> entriesIterator = entries.iterator()) {
         Map<Long, TransactionTask> transactionTasks = new HashMap<>();
-
+        long startTime = System.currentTimeMillis();
+        int count = 0, greaterThanCount = 0;
+        LOG.info("Reading change log from {}", entriesIterator.getClass());
         while (entriesIterator.hasNext()) {
+          count++;
           IcebergFileEntry entry = entriesIterator.next();
           if (fromSequence != null && entry.getSequenceNumber() <= fromSequence) {
             continue;
           }
+          greaterThanCount++;
           DefaultKeyedFile keyedFile =
               DefaultKeyedFile.parseChange((DataFile) entry.getFile(), entry.getSequenceNumber());
           BasicArcticFileScanTask task = new BasicArcticFileScanTask(keyedFile, null, spec, null);
@@ -200,6 +208,8 @@ public class FlinkSplitPlanner {
                     task.fileType()));
           }
         }
+        LOG.info("Read change log from {} in {} ms, count: {}, greater than fromSequence {} count: {}.",
+            entriesIterator.getClass(), System.currentTimeMillis() - startTime, count, fromSequence, greaterThanCount);
         return new BaseAndChangeTask(Collections.emptySet(), transactionTasks);
       } catch (IOException e) {
         throw new UncheckedIOException(e);

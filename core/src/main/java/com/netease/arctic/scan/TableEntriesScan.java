@@ -64,6 +64,7 @@ public class TableEntriesScan {
   private final boolean includeColumnStats;
   private final Set<FileContent> validFileContent;
   private final Schema schema;
+  private final Long fromSequence;
 
   private Table entriesTable;
   private InclusiveMetricsEvaluator lazyMetricsEvaluator = null;
@@ -82,6 +83,7 @@ public class TableEntriesScan {
     private boolean includeColumnStats = false;
     private final Set<FileContent> fileContents = Sets.newHashSet();
     private Schema schema;
+    private Long fromSequence;
 
     public Builder(Table table) {
       this.table = table;
@@ -142,19 +144,27 @@ public class TableEntriesScan {
       return this;
     }
 
+    public Builder fromSequence(Long fromSequence) {
+      this.fromSequence = fromSequence;
+      return this;
+    }
+
     public Builder project(Schema schema) {
       this.schema = schema;
       return this;
     }
 
     public TableEntriesScan build() {
-      return new TableEntriesScan(table, snapshotId, dataFilter, aliveEntry, fileContents, includeColumnStats, schema);
+      return
+          new TableEntriesScan(
+              table, snapshotId, dataFilter, aliveEntry, fileContents, includeColumnStats, schema, fromSequence);
     }
   }
 
 
   public TableEntriesScan(Table table, Long snapshotId, Expression dataFilter, boolean aliveEntry,
-                          Set<FileContent> validFileContent, boolean includeColumnStats, Schema schema) {
+                          Set<FileContent> validFileContent, boolean includeColumnStats, Schema schema,
+                          Long fromSequence) {
     this.table = table;
     this.dataFilter = dataFilter;
     this.aliveEntry = aliveEntry;
@@ -162,7 +172,8 @@ public class TableEntriesScan {
     this.validFileContent = validFileContent;
     this.snapshotId = snapshotId;
     this.includeColumnStats = includeColumnStats;
-    this.schema  = schema;
+    this.schema = schema;
+    this.fromSequence = fromSequence;
   }
 
   public CloseableIterable<IcebergFileEntry> entries() {
@@ -183,6 +194,9 @@ public class TableEntriesScan {
               ManifestEntryFields.Status.of(
                   entry.get(entryFieldIndex(ManifestEntryFields.STATUS.name()), Integer.class));
           long sequence = entry.get(entryFieldIndex(ManifestEntryFields.SEQUENCE_NUMBER.name()), Long.class);
+          if (fromSequence != null && fromSequence > sequence) {
+            return null;
+          }
           Long snapshotId = entry.get(entryFieldIndex(ManifestEntryFields.SNAPSHOT_ID.name()), Long.class);
           StructLike fileRecord =
               entry.get(entryFieldIndex(ManifestEntryFields.DATA_FILE_FIELD_NAME), StructLike.class);
