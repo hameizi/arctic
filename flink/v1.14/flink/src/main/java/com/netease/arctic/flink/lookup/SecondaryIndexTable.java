@@ -20,6 +20,7 @@ package com.netease.arctic.flink.lookup;
 
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
+
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.types.Types;
 
@@ -33,115 +34,118 @@ import java.util.stream.Collectors;
 
 import static com.netease.arctic.flink.lookup.LookupMetrics.SECONDARY_CACHE_SIZE;
 
+/**
+ *
+ */
 public class SecondaryIndexTable extends UniqueIndexTable {
-  private static final long serialVersionUID = 1L;
-  private final int[] secondaryKeyIndexMapping;
-  private final RocksDBSetMemoryState setState;
+    private static final long serialVersionUID = 1L;
+    private final int[] secondaryKeyIndexMapping;
+    private final RocksDBSetMemoryState setState;
 
-  private final LookupOptions lookupOptions;
+    private final LookupOptions lookupOptions;
 
-  public SecondaryIndexTable(
-      StateFactory stateFactory,
-      List<String> primaryKeys,
-      List<String> joinKeys,
-      Schema projectSchema,
-      LookupOptions lookupOptions) {
-    super(stateFactory, primaryKeys, projectSchema, lookupOptions);
+    public SecondaryIndexTable(
+        StateFactory stateFactory,
+        List<String> primaryKeys,
+        List<String> joinKeys,
+        Schema projectSchema,
+        LookupOptions lookupOptions) {
+        super(stateFactory, primaryKeys, projectSchema, lookupOptions);
 
-    this.setState =
-        stateFactory.createSetState(
-            "secondaryIndex",
-            createKeySerializer(projectSchema, joinKeys),
-            createKeySerializer(projectSchema, primaryKeys),
-            createValueSerializer(projectSchema),
-            lookupOptions);
+        this.setState =
+            stateFactory.createSetState(
+                "secondaryIndex",
+                createKeySerializer(projectSchema, joinKeys),
+                createKeySerializer(projectSchema, primaryKeys),
+                createValueSerializer(projectSchema),
+                lookupOptions);
 
-    List<String> fields = projectSchema.asStruct().fields()
-        .stream().map(Types.NestedField::name).collect(Collectors.toList());
-    secondaryKeyIndexMapping = joinKeys.stream().mapToInt(fields::indexOf).toArray();
-    this.lookupOptions = lookupOptions;
-  }
-
-  @Override
-  public void open() {
-    super.open();
-    setState.open();
-    setState.metricGroup.gauge(SECONDARY_CACHE_SIZE, () -> setState.guavaCache.size());
-  }
-
-  @Override
-  public List<RowData> get(RowData key) throws IOException {
-    Collection<ByteArrayWrapper> uniqueKeys = setState.get(key);
-    if (!uniqueKeys.isEmpty()) {
-      List<RowData> result = new ArrayList<>(uniqueKeys.size());
-      for (ByteArrayWrapper uniqueKey : uniqueKeys) {
-        recordState.get(uniqueKey.bytes).ifPresent(result::add);
-      }
-      return result;
+        List<String> fields = projectSchema.asStruct().fields()
+            .stream().map(Types.NestedField::name).collect(Collectors.toList());
+        secondaryKeyIndexMapping = joinKeys.stream().mapToInt(fields::indexOf).toArray();
+        this.lookupOptions = lookupOptions;
     }
-    return Collections.emptyList();
-  }
 
-  @Override
-  public void upsert(Iterator<RowData> dataStream) throws IOException {
-    while (dataStream.hasNext()) {
-      RowData value = dataStream.next();
-      RowData uniqueKey = new KeyRowData(uniqueKeyIndexMapping, value);
-      RowData joinKey = new KeyRowData(secondaryKeyIndexMapping, value);
-      byte[] uniqueKeyBytes = recordState.serializeKey(uniqueKey);
-
-      if (value.getRowKind() == RowKind.INSERT || value.getRowKind() == RowKind.UPDATE_AFTER) {
-        recordState.put(uniqueKeyBytes, value);
-        setState.merge(joinKey, uniqueKeyBytes);
-      } else {
-        recordState.delete(uniqueKeyBytes);
-        setState.delete(joinKey, uniqueKeyBytes);
-      }
+    @Override
+    public void open() {
+        super.open();
+        setState.open();
+        setState.metricGroup.gauge(SECONDARY_CACHE_SIZE, () -> setState.guavaCache.size());
     }
-    cleanUp();
-  }
 
-  @Override
-  public void initial(Iterator<RowData> dataStream) throws IOException {
-    while (dataStream.hasNext()) {
-      RowData value = dataStream.next();
-      RowData uniqueKey = new KeyRowData(uniqueKeyIndexMapping, value);
-      RowData joinKey = new KeyRowData(secondaryKeyIndexMapping, value);
-      byte[] uniqueKeyBytes = recordState.serializeKey(uniqueKey);
-
-      recordState.batchWrite(value.getRowKind(), uniqueKeyBytes, value);
-      setState.batchWrite(joinKey, uniqueKeyBytes);
+    @Override
+    public List<RowData> get(RowData key) throws IOException {
+        Collection<ByteArrayWrapper> uniqueKeys = setState.get(key);
+        if (!uniqueKeys.isEmpty()) {
+            List<RowData> result = new ArrayList<>(uniqueKeys.size());
+            for (ByteArrayWrapper uniqueKey : uniqueKeys) {
+                recordState.get(uniqueKey.bytes).ifPresent(result::add);
+            }
+            return result;
+        }
+        return Collections.emptyList();
     }
-    recordState.checkConcurrentFailed();
-    setState.checkConcurrentFailed();
-    recordState.flush();
-    setState.flush();
-  }
 
-  @Override
-  public boolean initialized() {
-    return recordState.initialized() && setState.initialized();
-  }
+    @Override
+    public void upsert(Iterator<RowData> dataStream) throws IOException {
+        while (dataStream.hasNext()) {
+            RowData value = dataStream.next();
+            RowData uniqueKey = new KeyRowData(uniqueKeyIndexMapping, value);
+            RowData joinKey = new KeyRowData(secondaryKeyIndexMapping, value);
+            byte[] uniqueKeyBytes = recordState.serializeKey(uniqueKey);
 
-  @Override
-  public void cleanUp() {
-    if (lookupOptions.isTTLAfterWriteValidated()) {
-      setState.guavaCache.cleanUp();
+            if (value.getRowKind() == RowKind.INSERT || value.getRowKind() == RowKind.UPDATE_AFTER) {
+                recordState.put(uniqueKeyBytes, value);
+                setState.put(joinKey, uniqueKeyBytes);
+            } else {
+                recordState.delete(uniqueKeyBytes);
+                setState.delete(joinKey, uniqueKeyBytes);
+            }
+        }
+        cleanUp();
     }
-  }
 
-  @Override
-  public void waitWriteRocksDBCompleted() {
-    super.waitWriteRocksDBCompleted();
-    LOG.info("Waiting for Set State initialization");
-    setState.waitWriteRocksDBDone();
-    LOG.info("The concurrent threads have finished writing data into the Set State.");
-    setState.initializationCompleted();
-  }
+    @Override
+    public void initialize(Iterator<RowData> dataStream) throws IOException {
+        while (dataStream.hasNext()) {
+            RowData value = dataStream.next();
+            RowData uniqueKey = new KeyRowData(uniqueKeyIndexMapping, value);
+            RowData joinKey = new KeyRowData(secondaryKeyIndexMapping, value);
+            byte[] uniqueKeyBytes = recordState.serializeKey(uniqueKey);
 
-  @Override
-  public void close() {
-    super.close();
-    recordState.close();
-  }
+            recordState.batchWrite(value.getRowKind(), uniqueKeyBytes, value);
+            setState.batchWrite(joinKey, uniqueKeyBytes);
+        }
+        recordState.checkConcurrentFailed();
+        setState.checkConcurrentFailed();
+        recordState.flush();
+        setState.flush();
+    }
+
+    @Override
+    public boolean initialized() {
+        return recordState.initialized() && setState.initialized();
+    }
+
+    @Override
+    public void cleanUp() {
+        if (lookupOptions.isTTLAfterWriteValidated()) {
+            setState.guavaCache.cleanUp();
+        }
+    }
+
+    @Override
+    public void waitInitializationCompleted() {
+        super.waitInitializationCompleted();
+        LOG.info("Waiting for Set State initialization");
+        setState.waitWriteRocksDBDone();
+        LOG.info("The concurrent threads have finished writing data into the Set State.");
+        setState.initializationCompleted();
+    }
+
+    @Override
+    public void close() {
+        super.close();
+        recordState.close();
+    }
 }

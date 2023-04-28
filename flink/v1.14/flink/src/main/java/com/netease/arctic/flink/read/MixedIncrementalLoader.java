@@ -36,72 +36,77 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * This is a mixed-format table(mixed iceberg, mixed-hive) incremental loader.
+ * This loader is used to load data by the merge on read approach first,
+ * then by the incremental pull approach.
+ * <p>Merge on read approach only contain INSERT rows.
+ * <p>Incremental pull approach contains INSERT, DELETE, UPDATE_BEFORE, and UPDATE_AFTER.
+ * <p>Support projection and filter push-down to speed up the loading process.
  */
 public class MixedIncrementalLoader<T> implements AutoCloseable {
-  private static final Logger LOG = LoggerFactory.getLogger(MixedIncrementalLoader.class);
-  private final ContinuousSplitPlanner continuousSplitPlanner;
-  private DataIteratorReaderFunction<T> readerFunction;
-  private AbstractAdaptHiveArcticDataReader<T> flinkArcticMORDataReader;
-  private final List<Expression> filters;
-  private final AtomicReference<ArcticEnumeratorOffset> enumeratorPosition;
-  private final Queue<ArcticSplit> splitQueue;
+    private static final Logger LOG = LoggerFactory.getLogger(MixedIncrementalLoader.class);
+    private final ContinuousSplitPlanner continuousSplitPlanner;
+    private DataIteratorReaderFunction<T> readerFunction;
+    private AbstractAdaptHiveArcticDataReader<T> flinkArcticMORDataReader;
+    private final List<Expression> filters;
+    private final AtomicReference<ArcticEnumeratorOffset> enumeratorPosition;
+    private final Queue<ArcticSplit> splitQueue;
 
-  public MixedIncrementalLoader(
-      ContinuousSplitPlanner continuousSplitPlanner,
-      AbstractAdaptHiveArcticDataReader<T> flinkArcticMORDataReader,
-      DataIteratorReaderFunction<T> readerFunction,
-      List<Expression> filters) {
-    this.continuousSplitPlanner = continuousSplitPlanner;
-    this.flinkArcticMORDataReader = flinkArcticMORDataReader;
-    this.readerFunction = readerFunction;
-    this.filters = filters;
-    this.enumeratorPosition = new AtomicReference<>();
-    this.splitQueue = new ArrayDeque<>();
-  }
-
-  public MixedIncrementalLoader(
-      ContinuousSplitPlanner continuousSplitPlanner,
-      DataIteratorReaderFunction<T> readerFunction,
-      List<Expression> filters) {
-    this.continuousSplitPlanner = continuousSplitPlanner;
-    this.readerFunction = readerFunction;
-    this.filters = filters;
-    this.enumeratorPosition = new AtomicReference<>();
-    this.splitQueue = new ArrayDeque<>();
-  }
-
-  public boolean hasNext() {
-    if (splitQueue.isEmpty()) {
-      ContinuousEnumerationResult planResult =
-          continuousSplitPlanner.planSplits(enumeratorPosition.get(), filters);
-      if (!planResult.isEmpty()) {
-        planResult.splits().forEach(split -> LOG.info("Putting this split into queue: {}.", split));
-        splitQueue.addAll(planResult.splits());
-      }
-      if (!planResult.toOffset().isEmpty()) {
-        enumeratorPosition.set(planResult.toOffset());
-      }
-      LOG.info("Currently, queue contain {} splits, scan position is {}.", splitQueue.size(), enumeratorPosition.get());
-      return !splitQueue.isEmpty();
-    }
-    return true;
-  }
-
-  public CloseableIterator<T> next() {
-    ArcticSplit split = splitQueue.poll();
-    if (split == null) {
-      throw new IllegalArgumentException("next() called, but no more valid splits");
+    public MixedIncrementalLoader(
+        ContinuousSplitPlanner continuousSplitPlanner,
+        AbstractAdaptHiveArcticDataReader<T> flinkArcticMORDataReader,
+        DataIteratorReaderFunction<T> readerFunction,
+        List<Expression> filters) {
+        this.continuousSplitPlanner = continuousSplitPlanner;
+        this.flinkArcticMORDataReader = flinkArcticMORDataReader;
+        this.readerFunction = readerFunction;
+        this.filters = filters;
+        this.enumeratorPosition = new AtomicReference<>();
+        this.splitQueue = new ArrayDeque<>();
     }
 
-    LOG.info("Fetching data by this split:{}.", split);
-    if (split.isMergeOnReadSplit()) {
-      return flinkArcticMORDataReader.readData(split.asMergeOnReadSplit().keyedTableScanTask());
+    public MixedIncrementalLoader(
+        ContinuousSplitPlanner continuousSplitPlanner,
+        DataIteratorReaderFunction<T> readerFunction,
+        List<Expression> filters) {
+        this.continuousSplitPlanner = continuousSplitPlanner;
+        this.readerFunction = readerFunction;
+        this.filters = filters;
+        this.enumeratorPosition = new AtomicReference<>();
+        this.splitQueue = new ArrayDeque<>();
     }
-    return readerFunction.createDataIterator(split);
-  }
 
-  @Override
-  public void close() throws Exception {
-    continuousSplitPlanner.close();
-  }
+    public boolean hasNext() {
+        if (splitQueue.isEmpty()) {
+            ContinuousEnumerationResult planResult =
+                continuousSplitPlanner.planSplits(enumeratorPosition.get(), filters);
+            if (!planResult.isEmpty()) {
+                planResult.splits().forEach(split -> LOG.info("Putting this split into queue: {}.", split));
+                splitQueue.addAll(planResult.splits());
+            }
+            if (!planResult.toOffset().isEmpty()) {
+                enumeratorPosition.set(planResult.toOffset());
+            }
+            LOG.info("Currently, queue contain {} splits, scan position is {}.", splitQueue.size(), enumeratorPosition.get());
+            return !splitQueue.isEmpty();
+        }
+        return true;
+    }
+
+    public CloseableIterator<T> next() {
+        ArcticSplit split = splitQueue.poll();
+        if (split == null) {
+            throw new IllegalArgumentException("next() called, but no more valid splits");
+        }
+
+        LOG.info("Fetching data by this split:{}.", split);
+        if (split.isMergeOnReadSplit()) {
+            return flinkArcticMORDataReader.readData(split.asMergeOnReadSplit().keyedTableScanTask());
+        }
+        return readerFunction.createDataIterator(split);
+    }
+
+    @Override
+    public void close() throws Exception {
+        continuousSplitPlanner.close();
+    }
 }

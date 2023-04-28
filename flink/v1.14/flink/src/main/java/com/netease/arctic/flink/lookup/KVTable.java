@@ -18,9 +18,10 @@
 
 package com.netease.arctic.flink.lookup;
 
-import com.netease.arctic.utils.SchemaUtil;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.data.RowData;
+
+import com.netease.arctic.utils.SchemaUtil;
 import org.apache.iceberg.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,66 +36,97 @@ import java.util.Set;
 
 import static com.netease.arctic.flink.util.LookupUtil.convertLookupOptions;
 
+/**
+ * The KVTable interface is used for lookup join in Arctic on Flink.
+ * It includes methods for initializing and updating the lookup table,
+ * as well as getting results by key and cleaning up the cache.
+ */
 public interface KVTable extends Serializable, Closeable {
-  Logger LOG = LoggerFactory.getLogger(KVTable.class);
+    Logger LOG = LoggerFactory.getLogger(KVTable.class);
 
-  List<RowData> get(RowData key) throws IOException;
+    /**
+     * Initialize the lookup table
+     */
+    void open();
 
-  void upsert(Iterator<RowData> dataStream) throws IOException;
+    /**
+     * Get the result by the key.
+     *
+     * @throws IOException Serialize the rowData failed.
+     */
+    List<RowData> get(RowData key) throws IOException;
 
-  void initial(Iterator<RowData> dataStream) throws IOException;
+    /**
+     * Upsert the {@link KVTable} by the Change table dataStream.
+     *
+     * @throws IOException Serialize the rowData failed.
+     */
+    void upsert(Iterator<RowData> dataStream) throws IOException;
 
-  boolean initialized();
+    /**
+     * Initial the {@link  KVTable} by the MoR dataStream.
+     *
+     * @param dataStream
+     * @throws IOException
+     */
+    void initialize(Iterator<RowData> dataStream) throws IOException;
 
-  /**
-   * Try to clean up the cache manually, due to the lookup_cache.ttl-after-write configuration.
-   */
-  default void cleanUp() {
-  }
+    /**
+     * @return if initialization is completed.
+     */
+    boolean initialized();
 
-  void close();
+    /**
+     * Waiting for the initialization completed, and enable auto compaction at the end of the initialization.
+     */
+    void waitInitializationCompleted();
 
-  default BinaryRowDataSerializerWrapper createKeySerializer(
-      Schema arcticTableSchema, List<String> keys) {
-    Schema keySchema = SchemaUtil.convertFieldsToSchema(arcticTableSchema, keys);
-    return new BinaryRowDataSerializerWrapper(keySchema);
-  }
-
-  default BinaryRowDataSerializerWrapper createValueSerializer(Schema projectSchema) {
-    return new BinaryRowDataSerializerWrapper(projectSchema);
-  }
-
-  static KVTable create(
-      StateFactory stateFactory,
-      List<String> primaryKeys,
-      List<String> joinKeys,
-      Schema projectSchema,
-      Configuration config) {
-    Set<String> joinKeySet = new HashSet<>(joinKeys);
-    Set<String> primaryKeySet = new HashSet<>(primaryKeys);
-    if (joinKeySet.size() > primaryKeySet.size() && joinKeySet.containsAll(primaryKeySet)) {
-      LOG.info("create unique index table, join keys contain all primary keys, unique keys are {}, join keys are {}.",
-          primaryKeys.toArray(), joinKeys.toArray());
-      return
-          new UniqueIndexTable(stateFactory, joinKeys, projectSchema,
-              convertLookupOptions(config));
+    /**
+     * Try to clean up the cache manually, due to the lookup_cache.ttl-after-write configuration.
+     * <p>lookup_cache.ttl-after-writ</p> Only works in SecondaryIndexTable.
+     */
+    default void cleanUp() {
     }
-    if (new HashSet<>(primaryKeys).equals(new HashSet<>(joinKeys))) {
-      LOG.info("create unique index table, unique keys are {}, join keys are {}.",
-          primaryKeys.toArray(), joinKeys.toArray());
-      return
-          new UniqueIndexTable(stateFactory, primaryKeys, projectSchema,
-              convertLookupOptions(config));
-    } else {
-      LOG.info("create secondary index table, unique keys are {}, join keys are {}.",
-          primaryKeys.toArray(), joinKeys.toArray());
-      return
-          new SecondaryIndexTable(stateFactory, primaryKeys, joinKeys, projectSchema,
-              convertLookupOptions(config));
+
+    void close();
+
+    default BinaryRowDataSerializerWrapper createKeySerializer(
+        Schema arcticTableSchema, List<String> keys) {
+        Schema keySchema = SchemaUtil.convertFieldsToSchema(arcticTableSchema, keys);
+        return new BinaryRowDataSerializerWrapper(keySchema);
     }
-  }
 
-  void waitWriteRocksDBCompleted();
+    default BinaryRowDataSerializerWrapper createValueSerializer(Schema projectSchema) {
+        return new BinaryRowDataSerializerWrapper(projectSchema);
+    }
 
-  void open();
+    static KVTable create(
+        StateFactory stateFactory,
+        List<String> primaryKeys,
+        List<String> joinKeys,
+        Schema projectSchema,
+        Configuration config) {
+        Set<String> joinKeySet = new HashSet<>(joinKeys);
+        Set<String> primaryKeySet = new HashSet<>(primaryKeys);
+        if (joinKeySet.size() > primaryKeySet.size() && joinKeySet.containsAll(primaryKeySet)) {
+            LOG.info("create unique index table, join keys contain all primary keys, unique keys are {}, join keys are {}.",
+                primaryKeys.toArray(), joinKeys.toArray());
+            return
+                new UniqueIndexTable(stateFactory, joinKeys, projectSchema,
+                    convertLookupOptions(config));
+        }
+        if (new HashSet<>(primaryKeys).equals(new HashSet<>(joinKeys))) {
+            LOG.info("create unique index table, unique keys are {}, join keys are {}.",
+                primaryKeys.toArray(), joinKeys.toArray());
+            return
+                new UniqueIndexTable(stateFactory, primaryKeys, projectSchema,
+                    convertLookupOptions(config));
+        } else {
+            LOG.info("create secondary index table, unique keys are {}, join keys are {}.",
+                primaryKeys.toArray(), joinKeys.toArray());
+            return
+                new SecondaryIndexTable(stateFactory, primaryKeys, joinKeys, projectSchema,
+                    convertLookupOptions(config));
+        }
+    }
 }

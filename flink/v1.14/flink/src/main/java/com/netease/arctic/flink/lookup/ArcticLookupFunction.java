@@ -18,12 +18,6 @@
 
 package com.netease.arctic.flink.lookup;
 
-import com.netease.arctic.flink.read.MixedIncrementalLoader;
-import com.netease.arctic.flink.read.hybrid.enumerator.MergeOnReadIncrementalPlanner;
-import com.netease.arctic.flink.read.hybrid.reader.RowDataReaderFunction;
-import com.netease.arctic.flink.read.source.FlinkArcticMORDataReader;
-import com.netease.arctic.flink.table.ArcticTableLoader;
-import com.netease.arctic.table.ArcticTable;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
@@ -32,6 +26,13 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.functions.FunctionContext;
 import org.apache.flink.table.functions.TableFunction;
 import org.apache.flink.util.FlinkRuntimeException;
+
+import com.netease.arctic.flink.read.MixedIncrementalLoader;
+import com.netease.arctic.flink.read.hybrid.enumerator.MergeOnReadIncrementalPlanner;
+import com.netease.arctic.flink.read.hybrid.reader.RowDataReaderFunction;
+import com.netease.arctic.flink.read.source.FlinkArcticMORDataReader;
+import com.netease.arctic.flink.table.ArcticTableLoader;
+import com.netease.arctic.table.ArcticTable;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.flink.data.RowDataUtil;
@@ -53,164 +54,178 @@ import static com.netease.arctic.flink.table.descriptors.ArcticValidator.LOOKUP_
 import static com.netease.arctic.flink.util.ArcticUtils.loadArcticTable;
 import static org.apache.flink.util.Preconditions.checkArgument;
 
+/**
+ * This is a lookup function for arctic table.
+ */
 public class ArcticLookupFunction extends TableFunction<RowData> {
-  private static final Logger LOG = LoggerFactory.getLogger(ArcticLookupFunction.class);
-  private ArcticTable arcticTable;
-  private KVTable kvTable;
-  private final List<String> joinKeys;
-  private final Schema projectSchema;
-  private final List<Expression> filters;
-  private final ArcticTableLoader loader;
-  private boolean loading = false;
-  private long nextLoadTime = Long.MIN_VALUE;
-  private final long reloadIntervalSeconds;
-  private MixedIncrementalLoader<RowData> incrementalLoader;
-  private Configuration config;
-  private transient MetricGroup metricGroup;
-  private transient AtomicLong lookupLoadingTimeMs;
+    private static final Logger LOG = LoggerFactory.getLogger(ArcticLookupFunction.class);
+    private static final long serialVersionUID = 1L;
+    private ArcticTable arcticTable;
+    private KVTable kvTable;
+    private final List<String> joinKeys;
+    private final Schema projectSchema;
+    private final List<Expression> filters;
+    private final ArcticTableLoader loader;
+    private boolean loading = false;
+    private long nextLoadTime = Long.MIN_VALUE;
+    private final long reloadIntervalSeconds;
+    private MixedIncrementalLoader<RowData> incrementalLoader;
+    private final Configuration config;
+    private transient AtomicLong lookupLoadingTimeMs;
 
-  public ArcticLookupFunction(
-      ArcticTable arcticTable,
-      List<String> joinKeys,
-      Schema projectSchema,
-      List<Expression> filters,
-      ArcticTableLoader tableLoader,
-      Configuration config) {
-    checkArgument(
-        arcticTable.isKeyedTable(),
-        String.format(
-            "Only keyed arctic table support lookup join, this table [%s] is an unkeyed table.", arcticTable.name()));
+    public ArcticLookupFunction(
+        ArcticTable arcticTable,
+        List<String> joinKeys,
+        Schema projectSchema,
+        List<Expression> filters,
+        ArcticTableLoader tableLoader,
+        Configuration config) {
+        checkArgument(
+            arcticTable.isKeyedTable(),
+            String.format(
+                "Only keyed arctic table support lookup join, this table [%s] is an unkeyed table.", arcticTable.name()));
 
-    this.joinKeys = joinKeys;
-    this.projectSchema = projectSchema;
-    this.filters = filters;
-    this.loader = tableLoader;
-    this.config = config;
-    this.reloadIntervalSeconds = config.get(LOOKUP_RELOADING_INTERVAL).getSeconds();
-  }
-
-  @Override
-  public void open(FunctionContext context) throws IOException {
-    metricGroup = context.getMetricGroup().addGroup(GROUP_NAME_LOOKUP);
-    if (arcticTable == null) {
-      arcticTable = loadArcticTable(loader).asKeyedTable();
+        this.joinKeys = joinKeys;
+        this.projectSchema = projectSchema;
+        this.filters = filters;
+        this.loader = tableLoader;
+        this.config = config;
+        this.reloadIntervalSeconds = config.get(LOOKUP_RELOADING_INTERVAL).getSeconds();
     }
-    arcticTable.refresh();
 
-    lookupLoadingTimeMs = new AtomicLong();
-    metricGroup.gauge(LOADING_TIME_MS, () -> lookupLoadingTimeMs.get());
-
-    LOG.info(
-        "projected schema {}.\n table schema {}.",
-        projectSchema,
-        arcticTable.schema());
-    kvTable = KVTable.create(
-        new StateFactory(generateRocksDBPath(context, arcticTable.name()), metricGroup),
-        arcticTable.asKeyedTable().primaryKeySpec().fieldNames(),
-        joinKeys,
-        projectSchema,
-        config);
-    kvTable.open();
-    this.incrementalLoader =
-        new MixedIncrementalLoader<>(
-            new MergeOnReadIncrementalPlanner(loader),
-            new FlinkArcticMORDataReader(
-                arcticTable.io(),
-                arcticTable.schema(),
-                projectSchema,
-                arcticTable.asKeyedTable().primaryKeySpec(),
-                null,
-                true,
-                RowDataUtil::convertConstant,
-                true
-            ),
-            new RowDataReaderFunction(
-                new Configuration(),
-                arcticTable.schema(),
-                projectSchema,
-                arcticTable.asKeyedTable().primaryKeySpec(),
-                null,
-                true,
-                arcticTable.io(),
-                true
-            ),
-            filters
-        );
-    checkAndLoad();
-  }
-
-  public void eval(Object... values) {
-    try {
-      checkAndLoad();
-      RowData lookupKey = GenericRowData.of(values);
-      List<RowData> results = kvTable.get(lookupKey);
-      results.forEach(this::collect);
-    } catch (Exception e) {
-      throw new FlinkRuntimeException(e);
-    }
-  }
-
-  private synchronized void checkAndLoad() throws IOException {
-    if (nextLoadTime > System.currentTimeMillis()) {
-      return;
-    }
-    if (loading) {
-      LOG.info("Mixed table incremental loader is running.");
-      return;
-    }
-    nextLoadTime = System.currentTimeMillis() + 1000 * reloadIntervalSeconds;
-
-    loading = true;
-    long batchStart = System.currentTimeMillis();
-    while (incrementalLoader.hasNext()) {
-      long start = System.currentTimeMillis();
-      arcticTable.io().doAs(() -> {
-        try (CloseableIterator<RowData> iterator = incrementalLoader.next()) {
-          if (kvTable.initialized()) {
-            kvTable.upsert(iterator);
-          } else {
-            LOG.info("This table {} is still under initialization progress.", arcticTable.name());
-            kvTable.initial(iterator);
-          }
+    /**
+     * Open the lookup function, e.g.: create {@link KVTable} kvTable, and load data.
+     *
+     * @throws IOException If serialize or deserialize failed
+     */
+    @Override
+    public void open(FunctionContext context) throws IOException {
+        MetricGroup metricGroup = context.getMetricGroup().addGroup(GROUP_NAME_LOOKUP);
+        if (arcticTable == null) {
+            arcticTable = loadArcticTable(loader).asKeyedTable();
         }
-        return null;
-      });
-      LOG.info("Split task fetched, cost {}ms.", System.currentTimeMillis() - start);
+        arcticTable.refresh();
+
+        lookupLoadingTimeMs = new AtomicLong();
+        metricGroup.gauge(LOADING_TIME_MS, () -> lookupLoadingTimeMs.get());
+
+        LOG.info(
+            "projected schema {}.\n table schema {}.",
+            projectSchema,
+            arcticTable.schema());
+        kvTable = KVTable.create(
+            new StateFactory(generateRocksDBPath(context, arcticTable.name()), metricGroup),
+            arcticTable.asKeyedTable().primaryKeySpec().fieldNames(),
+            joinKeys,
+            projectSchema,
+            config);
+        kvTable.open();
+        this.incrementalLoader =
+            new MixedIncrementalLoader<>(
+                new MergeOnReadIncrementalPlanner(loader),
+                new FlinkArcticMORDataReader(
+                    arcticTable.io(),
+                    arcticTable.schema(),
+                    projectSchema,
+                    arcticTable.asKeyedTable().primaryKeySpec(),
+                    null,
+                    true,
+                    RowDataUtil::convertConstant,
+                    true
+                ),
+                new RowDataReaderFunction(
+                    new Configuration(),
+                    arcticTable.schema(),
+                    projectSchema,
+                    arcticTable.asKeyedTable().primaryKeySpec(),
+                    null,
+                    true,
+                    arcticTable.io(),
+                    true
+                ),
+                filters
+            );
+        checkAndLoad();
     }
-    if (!kvTable.initialized()) {
-      kvTable.waitWriteRocksDBCompleted();
+
+    public void eval(Object... values) {
+        try {
+            checkAndLoad();
+            RowData lookupKey = GenericRowData.of(values);
+            List<RowData> results = kvTable.get(lookupKey);
+            results.forEach(this::collect);
+        } catch (Exception e) {
+            throw new FlinkRuntimeException(e);
+        }
     }
-    lookupLoadingTimeMs.set(System.currentTimeMillis() - batchStart);
 
-    LOG.info("{} table lookup loading, these batch tasks completed, cost {}ms.",
-        arcticTable.name(), lookupLoadingTimeMs.get());
+    /**
+     * Check whether it is time to periodically load data to kvTable.
+     * Support to use {@link Expression} filters to filter the data.
+     *
+     * @throws IOException If serialize or deserialize failed.
+     */
+    private synchronized void checkAndLoad() throws IOException {
+        if (nextLoadTime > System.currentTimeMillis()) {
+            return;
+        }
+        if (loading) {
+            LOG.info("Mixed table incremental loader is running.");
+            return;
+        }
+        nextLoadTime = System.currentTimeMillis() + 1000 * reloadIntervalSeconds;
 
-    loading = false;
-  }
+        loading = true;
+        long batchStart = System.currentTimeMillis();
+        while (incrementalLoader.hasNext()) {
+            long start = System.currentTimeMillis();
+            arcticTable.io().doAs(() -> {
+                try (CloseableIterator<RowData> iterator = incrementalLoader.next()) {
+                    if (kvTable.initialized()) {
+                        kvTable.upsert(iterator);
+                    } else {
+                        LOG.info("This table {} is still under initialization progress.", arcticTable.name());
+                        kvTable.initialize(iterator);
+                    }
+                }
+                return null;
+            });
+            LOG.info("Split task fetched, cost {}ms.", System.currentTimeMillis() - start);
+        }
+        if (!kvTable.initialized()) {
+            kvTable.waitInitializationCompleted();
+        }
+        lookupLoadingTimeMs.set(System.currentTimeMillis() - batchStart);
 
-  @Override
-  public void close() throws Exception {
-    if (kvTable != null) {
-      kvTable.close();
+        LOG.info("{} table lookup loading, these batch tasks completed, cost {}ms.",
+            arcticTable.name(), lookupLoadingTimeMs.get());
+
+        loading = false;
     }
-  }
 
-  private String generateRocksDBPath(FunctionContext context, String tableName) {
-    String tmpPath = getTmpDirectoryFromTMContainer(context);
-    File db = new File(tmpPath, tableName + "-lookup-" + UUID.randomUUID());
-    return db.toString();
-  }
-
-  private static String getTmpDirectoryFromTMContainer(FunctionContext context) {
-    try {
-      Field field = context.getClass().getDeclaredField("context");
-      field.setAccessible(true);
-      StreamingRuntimeContext runtimeContext = (StreamingRuntimeContext) field.get(context);
-      String[] tmpDirectories =
-          runtimeContext.getTaskManagerRuntimeInfo().getTmpDirectories();
-      return tmpDirectories[ThreadLocalRandom.current().nextInt(tmpDirectories.length)];
-    } catch (NoSuchFieldException | IllegalAccessException e) {
-      throw new RuntimeException(e);
+    @Override
+    public void close() throws Exception {
+        if (kvTable != null) {
+            kvTable.close();
+        }
     }
-  }
+
+    private String generateRocksDBPath(FunctionContext context, String tableName) {
+        String tmpPath = getTmpDirectoryFromTMContainer(context);
+        File db = new File(tmpPath, tableName + "-lookup-" + UUID.randomUUID());
+        return db.toString();
+    }
+
+    private static String getTmpDirectoryFromTMContainer(FunctionContext context) {
+        try {
+            Field field = context.getClass().getDeclaredField("context");
+            field.setAccessible(true);
+            StreamingRuntimeContext runtimeContext = (StreamingRuntimeContext) field.get(context);
+            String[] tmpDirectories =
+                runtimeContext.getTaskManagerRuntimeInfo().getTmpDirectories();
+            return tmpDirectories[ThreadLocalRandom.current().nextInt(tmpDirectories.length)];
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new RuntimeException(e);
+        }
+    }
 }
