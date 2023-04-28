@@ -18,7 +18,6 @@
 
 package com.netease.arctic.flink.lookup;
 
-import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
 import org.apache.iceberg.Schema;
@@ -32,47 +31,51 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.stream.Collectors;
 
+import static com.netease.arctic.flink.lookup.LookupMetrics.SECONDARY_CACHE_SIZE;
+
 public class SecondaryIndexTable extends UniqueIndexTable {
   private static final long serialVersionUID = 1L;
   private final int[] secondaryKeyIndexMapping;
-  private final RocksDBSetSpillState setState;
+  private final RocksDBSetMemoryState setState;
+
+  private final LookupOptions lookupOptions;
 
   public SecondaryIndexTable(
       StateFactory stateFactory,
       List<String> primaryKeys,
       List<String> joinKeys,
-      long lruCacheSize,
       Schema projectSchema,
-      Configuration config) {
-    super(stateFactory, primaryKeys, lruCacheSize, projectSchema, config);
+      LookupOptions lookupOptions) {
+    super(stateFactory, primaryKeys, projectSchema, lookupOptions);
 
     this.setState =
         stateFactory.createSetState(
             "secondaryIndex",
-            lruCacheSize,
             createKeySerializer(projectSchema, joinKeys),
             createKeySerializer(projectSchema, primaryKeys),
             createValueSerializer(projectSchema),
-            config);
+            lookupOptions);
 
     List<String> fields = projectSchema.asStruct().fields()
         .stream().map(Types.NestedField::name).collect(Collectors.toList());
     secondaryKeyIndexMapping = joinKeys.stream().mapToInt(fields::indexOf).toArray();
+    this.lookupOptions = lookupOptions;
   }
 
   @Override
   public void open() {
     super.open();
     setState.open();
+    setState.metricGroup.gauge(SECONDARY_CACHE_SIZE, () -> setState.guavaCache.size());
   }
 
   @Override
   public List<RowData> get(RowData key) throws IOException {
-    Collection<byte[]> uniqueKeys = setState.get(key);
+    Collection<ByteArrayWrapper> uniqueKeys = setState.get(key);
     if (!uniqueKeys.isEmpty()) {
       List<RowData> result = new ArrayList<>(uniqueKeys.size());
-      for (byte[] uniqueKey : uniqueKeys) {
-        recordState.get(uniqueKey).ifPresent(result::add);
+      for (ByteArrayWrapper uniqueKey : uniqueKeys) {
+        recordState.get(uniqueKey.bytes).ifPresent(result::add);
       }
       return result;
     }
@@ -95,6 +98,7 @@ public class SecondaryIndexTable extends UniqueIndexTable {
         setState.delete(joinKey, uniqueKeyBytes);
       }
     }
+    cleanUp();
   }
 
   @Override
@@ -117,6 +121,13 @@ public class SecondaryIndexTable extends UniqueIndexTable {
   @Override
   public boolean initialized() {
     return recordState.initialized() && setState.initialized();
+  }
+
+  @Override
+  public void cleanUp() {
+    if (lookupOptions.isTTLAfterWriteValidated()) {
+      setState.guavaCache.cleanUp();
+    }
   }
 
   @Override

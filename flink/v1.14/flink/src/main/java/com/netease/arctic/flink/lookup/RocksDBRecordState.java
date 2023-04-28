@@ -19,6 +19,7 @@
 package com.netease.arctic.flink.lookup;
 
 import com.netease.arctic.utils.map.RocksDBBackend;
+import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.Preconditions;
@@ -38,17 +39,17 @@ public class RocksDBRecordState extends RocksDBState<byte[]> {
   public RocksDBRecordState(
       RocksDBBackend rocksDB,
       String columnFamilyName,
-      long lruMaximumSize,
       BinaryRowDataSerializerWrapper keySerializer,
       BinaryRowDataSerializerWrapper valueSerializer,
-      int writeRocksDBThreadNum) {
+      MetricGroup metricGroup,
+      LookupOptions lookupOptions) {
     super(
         rocksDB,
         columnFamilyName,
-        lruMaximumSize,
         keySerializer,
         valueSerializer,
-        writeRocksDBThreadNum,
+        metricGroup,
+        lookupOptions,
         false);
   }
 
@@ -65,8 +66,8 @@ public class RocksDBRecordState extends RocksDBState<byte[]> {
 
   public void batchWrite(RowKind rowKind, byte[] keyBytes, RowData value) throws IOException {
     byte[] valueBytes = serializeValue(value);
-    RocksDBRecord.OpType opType = convertToOpType(rowKind);
-    putIntoQueue(RocksDBRecord.of(opType, keyBytes, valueBytes));
+    LookupRecord.OpType opType = convertToOpType(rowKind);
+    putIntoQueue(LookupRecord.of(opType, keyBytes, valueBytes));
   }
 
   /**

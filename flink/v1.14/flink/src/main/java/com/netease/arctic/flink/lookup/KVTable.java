@@ -33,6 +33,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 
+import static com.netease.arctic.flink.util.LookupUtil.convertLookupOptions;
+
 public interface KVTable extends Serializable, Closeable {
   Logger LOG = LoggerFactory.getLogger(KVTable.class);
 
@@ -43,6 +45,12 @@ public interface KVTable extends Serializable, Closeable {
   void initial(Iterator<RowData> dataStream) throws IOException;
 
   boolean initialized();
+
+  /**
+   * Try to clean up the cache manually, due to the lookup_cache.ttl-after-write configuration.
+   */
+  default void cleanUp() {
+  }
 
   void close();
 
@@ -60,7 +68,6 @@ public interface KVTable extends Serializable, Closeable {
       StateFactory stateFactory,
       List<String> primaryKeys,
       List<String> joinKeys,
-      long lruCacheSize,
       Schema projectSchema,
       Configuration config) {
     Set<String> joinKeySet = new HashSet<>(joinKeys);
@@ -68,16 +75,22 @@ public interface KVTable extends Serializable, Closeable {
     if (joinKeySet.size() > primaryKeySet.size() && joinKeySet.containsAll(primaryKeySet)) {
       LOG.info("create unique index table, join keys contain all primary keys, unique keys are {}, join keys are {}.",
           primaryKeys.toArray(), joinKeys.toArray());
-      return new UniqueIndexTable(stateFactory, joinKeys, lruCacheSize, projectSchema, config);
+      return
+          new UniqueIndexTable(stateFactory, joinKeys, projectSchema,
+              convertLookupOptions(config));
     }
     if (new HashSet<>(primaryKeys).equals(new HashSet<>(joinKeys))) {
       LOG.info("create unique index table, unique keys are {}, join keys are {}.",
           primaryKeys.toArray(), joinKeys.toArray());
-      return new UniqueIndexTable(stateFactory, primaryKeys, lruCacheSize, projectSchema, config);
+      return
+          new UniqueIndexTable(stateFactory, primaryKeys, projectSchema,
+              convertLookupOptions(config));
     } else {
       LOG.info("create secondary index table, unique keys are {}, join keys are {}.",
           primaryKeys.toArray(), joinKeys.toArray());
-      return new SecondaryIndexTable(stateFactory, primaryKeys, joinKeys, lruCacheSize, projectSchema, config);
+      return
+          new SecondaryIndexTable(stateFactory, primaryKeys, joinKeys, projectSchema,
+              convertLookupOptions(config));
     }
   }
 

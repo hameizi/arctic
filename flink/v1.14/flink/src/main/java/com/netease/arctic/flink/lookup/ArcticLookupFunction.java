@@ -25,6 +25,7 @@ import com.netease.arctic.flink.read.source.FlinkArcticMORDataReader;
 import com.netease.arctic.flink.table.ArcticTableLoader;
 import com.netease.arctic.table.ArcticTable;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
@@ -44,8 +45,11 @@ import java.lang.reflect.Field;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicLong;
 
-import static com.netease.arctic.flink.table.descriptors.ArcticValidator.LOOKUP_RELOADING_INTERVAL_SECONDS;
+import static com.netease.arctic.flink.lookup.LookupMetrics.GROUP_NAME_LOOKUP;
+import static com.netease.arctic.flink.lookup.LookupMetrics.LOADING_TIME_MS;
+import static com.netease.arctic.flink.table.descriptors.ArcticValidator.LOOKUP_RELOADING_INTERVAL;
 import static com.netease.arctic.flink.util.ArcticUtils.loadArcticTable;
 import static org.apache.flink.util.Preconditions.checkArgument;
 
@@ -54,7 +58,6 @@ public class ArcticLookupFunction extends TableFunction<RowData> {
   private ArcticTable arcticTable;
   private KVTable kvTable;
   private final List<String> joinKeys;
-  private final long lruCacheSize;
   private final Schema projectSchema;
   private final List<Expression> filters;
   private final ArcticTableLoader loader;
@@ -63,12 +66,13 @@ public class ArcticLookupFunction extends TableFunction<RowData> {
   private final long reloadIntervalSeconds;
   private MixedIncrementalLoader<RowData> incrementalLoader;
   private Configuration config;
+  private transient MetricGroup metricGroup;
+  private transient AtomicLong lookupLoadingTimeMs;
 
   public ArcticLookupFunction(
       ArcticTable arcticTable,
       List<String> joinKeys,
       Schema projectSchema,
-      long cacheMaxRows,
       List<Expression> filters,
       ArcticTableLoader tableLoader,
       Configuration config) {
@@ -79,29 +83,31 @@ public class ArcticLookupFunction extends TableFunction<RowData> {
 
     this.joinKeys = joinKeys;
     this.projectSchema = projectSchema;
-    this.lruCacheSize = cacheMaxRows;
     this.filters = filters;
     this.loader = tableLoader;
     this.config = config;
-    this.reloadIntervalSeconds = config.get(LOOKUP_RELOADING_INTERVAL_SECONDS);
+    this.reloadIntervalSeconds = config.get(LOOKUP_RELOADING_INTERVAL).getSeconds();
   }
 
   @Override
   public void open(FunctionContext context) throws IOException {
+    metricGroup = context.getMetricGroup().addGroup(GROUP_NAME_LOOKUP);
     if (arcticTable == null) {
       arcticTable = loadArcticTable(loader).asKeyedTable();
     }
     arcticTable.refresh();
+
+    lookupLoadingTimeMs = new AtomicLong();
+    metricGroup.gauge(LOADING_TIME_MS, () -> lookupLoadingTimeMs.get());
 
     LOG.info(
         "projected schema {}.\n table schema {}.",
         projectSchema,
         arcticTable.schema());
     kvTable = KVTable.create(
-        new StateFactory(generateRocksDBPath(context, arcticTable.name())),
+        new StateFactory(generateRocksDBPath(context, arcticTable.name()), metricGroup),
         arcticTable.asKeyedTable().primaryKeySpec().fieldNames(),
         joinKeys,
-        lruCacheSize,
         projectSchema,
         config);
     kvTable.open();
@@ -174,8 +180,11 @@ public class ArcticLookupFunction extends TableFunction<RowData> {
     if (!kvTable.initialized()) {
       kvTable.waitWriteRocksDBCompleted();
     }
+    lookupLoadingTimeMs.set(System.currentTimeMillis() - batchStart);
+
     LOG.info("{} table lookup loading, these batch tasks completed, cost {}ms.",
-        arcticTable.name(), System.currentTimeMillis() - batchStart);
+        arcticTable.name(), lookupLoadingTimeMs.get());
+
     loading = false;
   }
 

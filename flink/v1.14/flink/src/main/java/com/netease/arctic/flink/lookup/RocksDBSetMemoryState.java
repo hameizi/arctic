@@ -19,32 +19,34 @@
 package com.netease.arctic.flink.lookup;
 
 import com.netease.arctic.utils.map.RocksDBBackend;
+import org.apache.flink.metrics.MetricGroup;
+import org.apache.flink.shaded.guava30.com.google.common.cache.Cache;
 import org.apache.flink.table.data.RowData;
+import org.apache.iceberg.relocated.com.google.common.collect.Sets;
 
 import java.io.IOException;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Set;
-import java.util.stream.Collectors;
 
-public class RocksDBSetSpillState extends RocksDBState<Set<byte[]>> {
+public class RocksDBSetMemoryState extends RocksDBState<Set<ByteArrayWrapper>> {
   protected BinaryRowDataSerializerWrapper keySerializer;
 
-  public RocksDBSetSpillState(
+  public RocksDBSetMemoryState(
       RocksDBBackend rocksDB,
       String columnFamilyName,
-      long lruMaximumSize,
       BinaryRowDataSerializerWrapper joinKeySerializer,
       BinaryRowDataSerializerWrapper uniqueKeySerialization,
       BinaryRowDataSerializerWrapper valueSerializer,
-      int writeRocksDBThreadNum) {
+      MetricGroup metricGroup,
+      LookupOptions lookupOptions) {
     super(
         rocksDB,
         columnFamilyName,
-        lruMaximumSize,
         uniqueKeySerialization,
         valueSerializer,
-        writeRocksDBThreadNum,
+        metricGroup,
+        lookupOptions,
         true);
     this.keySerializer = joinKeySerializer;
   }
@@ -55,8 +57,8 @@ public class RocksDBSetSpillState extends RocksDBState<Set<byte[]>> {
 
   public void batchWrite(RowData joinKey, byte[] uniqueKeyBytes) throws IOException {
     byte[] joinKeyBytes = serializeKey(joinKey);
-    RocksDBRecord.OpType opType = convertToOpType(joinKey.getRowKind());
-    putIntoQueue(RocksDBRecord.of(opType, joinKeyBytes, uniqueKeyBytes));
+    LookupRecord.OpType opType = convertToOpType(joinKey.getRowKind());
+    putIntoQueue(LookupRecord.of(opType, joinKeyBytes, uniqueKeyBytes));
   }
 
   @Override
@@ -66,20 +68,12 @@ public class RocksDBSetSpillState extends RocksDBState<Set<byte[]>> {
 
   public void merge(RowData joinKey, byte[] uniqueKeyBytes) throws IOException {
     byte[] joinKeyBytes = serializeKey(joinKey);
-    ByteArrayWrapper keyWrap = wrap(joinKeyBytes);
-    if (guavaCache.getIfPresent(keyWrap) != null) {
-      guavaCache.invalidate(keyWrap);
-    }
-    putSecondaryMap(joinKeyBytes, uniqueKeyBytes);
+    putSecondaryCache(joinKeyBytes, uniqueKeyBytes);
   }
 
   public void delete(RowData joinKey, byte[] uniqueKeyBytes) throws IOException {
     final byte[] joinKeyBytes = serializeKey(joinKey);
-    ByteArrayWrapper keyWrap = wrap(joinKeyBytes);
-    if (guavaCache.getIfPresent(keyWrap) != null) {
-      guavaCache.invalidate(keyWrap);
-    }
-    deleteSecondaryMap(joinKeyBytes, uniqueKeyBytes);
+    deleteSecondaryCache(joinKeyBytes, uniqueKeyBytes);
   }
 
   /**
@@ -90,19 +84,40 @@ public class RocksDBSetSpillState extends RocksDBState<Set<byte[]>> {
    *
    * @return not null, but may be empty.
    */
-  public Collection<byte[]> get(RowData key) throws IOException {
+  public Collection<ByteArrayWrapper> get(RowData key) throws IOException {
     final byte[] keyBytes = serializeKey(key);
     ByteArrayWrapper keyWrap = wrap(keyBytes);
-    Set<byte[]> result = guavaCache.getIfPresent(keyWrap);
+    Set<ByteArrayWrapper> result = guavaCache.getIfPresent(keyWrap);
     if (result == null) {
-      Set<ByteArrayWrapper> otherKeys = secondaryIndexMap.get(keyWrap);
-      if (otherKeys == null) {
-        return Collections.emptyList();
-      }
-      result = otherKeys.stream().map(baw -> baw.bytes).collect(Collectors.toSet());
-      guavaCache.put(keyWrap, result);
-      return otherKeys.stream().map(wrap -> wrap.bytes).collect(Collectors.toList());
+      return Collections.emptyList();
     }
     return result;
+  }
+
+  @Override
+  public void putCacheValue(Cache<ByteArrayWrapper, Set<ByteArrayWrapper>> cache,
+                            ByteArrayWrapper keyWrap, ByteArrayWrapper valueWrap) {
+    guavaCache.asMap().compute(keyWrap, (keyWrapper, oldSet) -> {
+      if (oldSet == null) {
+        oldSet = Sets.newHashSet();
+      }
+      oldSet.add(valueWrap);
+      return oldSet;
+    });
+  }
+
+  @Override
+  public void removeValue(
+      Cache<ByteArrayWrapper, Set<ByteArrayWrapper>> cache, ByteArrayWrapper keyWrap, ByteArrayWrapper valueWrap) {
+    guavaCache.asMap().compute(keyWrap, (keyWrapper, oldSet) -> {
+      if (oldSet == null) {
+        return null;
+      }
+      oldSet.remove(valueWrap);
+      if (oldSet.isEmpty()) {
+        return null;
+      }
+      return oldSet;
+    });
   }
 }

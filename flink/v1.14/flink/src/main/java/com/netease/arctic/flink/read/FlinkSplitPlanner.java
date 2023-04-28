@@ -129,10 +129,11 @@ public class FlinkSplitPlanner {
     List<ArcticSplit> changeTasks = new ArrayList<>(transactionTasks.size());
     transactionTasks
         .forEach(transactionTask -> {
-          PartitionAndNodeGroup partitionAndNodeGroup = new PartitionAndNodeGroup()
-              .insertFileScanTask(transactionTask.insertTasks)
-              .deleteFileScanTask(transactionTask.deleteTasks)
-              .splitCount(splitCount);
+          PartitionAndNodeGroup partitionAndNodeGroup =
+              new PartitionAndNodeGroup()
+                  .insertFileScanTask(transactionTask.insertTasks)
+                  .deleteFileScanTask(transactionTask.deleteTasks)
+                  .splitCount(splitCount);
           changeTasks.addAll(partitionAndNodeGroup.planSplits());
         });
 

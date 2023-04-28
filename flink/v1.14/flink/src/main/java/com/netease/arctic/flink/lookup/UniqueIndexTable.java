@@ -18,7 +18,6 @@
 
 package com.netease.arctic.flink.lookup;
 
-import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
 import org.apache.iceberg.Schema;
@@ -31,37 +30,35 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+import static com.netease.arctic.flink.lookup.LookupMetrics.UNIQUE_CACHE_SIZE;
+
 public class UniqueIndexTable implements KVTable {
   private static final long serialVersionUID = 1L;
   protected final RocksDBRecordState recordState;
 
   protected int[] uniqueKeyIndexMapping;
 
-  protected long lruSize;
-
   public UniqueIndexTable(
       StateFactory stateFactory,
       List<String> primaryKeys,
-      long lruCacheSize,
       Schema projectSchema,
-      Configuration config) {
+      LookupOptions lookupOptions) {
 
     recordState =
         stateFactory.createRecordState(
             "uniqueIndex",
-            lruCacheSize,
             createKeySerializer(projectSchema, primaryKeys),
             createValueSerializer(projectSchema),
-            config);
+            lookupOptions);
     List<String> fields = projectSchema.asStruct().fields()
         .stream().map(Types.NestedField::name).collect(Collectors.toList());
     this.uniqueKeyIndexMapping = primaryKeys.stream().mapToInt(fields::indexOf).toArray();
-    this.lruSize = lruCacheSize;
   }
 
   @Override
   public void open() {
     recordState.open();
+    recordState.metricGroup.gauge(UNIQUE_CACHE_SIZE, () -> recordState.guavaCache.size());
   }
 
   @Override

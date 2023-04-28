@@ -20,6 +20,7 @@ package com.netease.arctic.flink.lookup;
 
 import com.netease.arctic.log.Bytes;
 import com.netease.arctic.utils.map.RocksDBBackend;
+import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.table.data.RowData;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 
@@ -40,18 +41,18 @@ public class RocksDBSetState extends RocksDBState<List<byte[]>> {
   public RocksDBSetState(
       RocksDBBackend rocksDB,
       String columnFamilyName,
-      long lruMaximumSize,
       BinaryRowDataSerializerWrapper keySerialization,
       BinaryRowDataSerializerWrapper elementSerialization,
       BinaryRowDataSerializerWrapper valueSerializer,
-      int writeRocksDBThreadNum) {
+      MetricGroup metricGroup,
+      LookupOptions lookupOptions) {
     super(
         rocksDB,
         columnFamilyName,
-        lruMaximumSize,
         elementSerialization,
         valueSerializer,
-        writeRocksDBThreadNum,
+        metricGroup,
+        lookupOptions,
         false);
     this.keySerializer = keySerialization;
   }
@@ -128,8 +129,8 @@ public class RocksDBSetState extends RocksDBState<List<byte[]>> {
   public void batchWrite(RowData joinKey, byte[] uniqueKeyBytes) throws IOException {
     byte[] joinKeyBytes = serializeKey(joinKey);
     byte[] joinKeyAndPrimaryKeyBytes = Bytes.mergeByte(joinKeyBytes, uniqueKeyBytes);
-    RocksDBRecord.OpType opType = convertToOpType(joinKey.getRowKind());
-    rocksDBRecordQueue.add(RocksDBRecord.of(opType, joinKeyAndPrimaryKeyBytes, EMPTY));
+    LookupRecord.OpType opType = convertToOpType(joinKey.getRowKind());
+    lookupRecordsQueue.add(LookupRecord.of(opType, joinKeyAndPrimaryKeyBytes, EMPTY));
   }
 
   @Override

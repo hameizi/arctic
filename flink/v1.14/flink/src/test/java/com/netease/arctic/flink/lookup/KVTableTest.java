@@ -23,11 +23,14 @@ import com.netease.arctic.utils.SchemaUtil;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.memory.DataInputDeserializer;
 import org.apache.flink.core.memory.DataOutputSerializer;
+import org.apache.flink.shaded.guava30.com.google.common.cache.Cache;
+import org.apache.flink.shaded.guava30.com.google.common.cache.CacheBuilder;
 import org.apache.flink.shaded.guava30.com.google.common.collect.Lists;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.data.binary.BinaryRowData;
+import org.apache.flink.table.functions.ConstantFunctionContext;
 import org.apache.flink.table.runtime.typeutils.BinaryRowDataSerializer;
 import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
 import org.apache.flink.table.types.logical.RowType;
@@ -45,9 +48,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import static com.netease.arctic.flink.table.descriptors.ArcticValidator.ROCKSDB_WRITING_THREADS;
 
@@ -166,6 +172,7 @@ public class KVTableTest {
 
   @Test
   public void testInitialSecondaryKeyTable() throws IOException {
+    config.setInteger(ROCKSDB_WRITING_THREADS, 10);
     // primary keys are id and grade.
     List<String> joinKeys = Lists.newArrayList("id");
     try (SecondaryIndexTable secondaryIndexTable = (SecondaryIndexTable) createTable(joinKeys)) {
@@ -218,12 +225,35 @@ public class KVTableTest {
     }
   }
 
+  @Test
+  public void testCacheExpired() throws InterruptedException {
+    Cache<Integer, Integer> cache = CacheBuilder.newBuilder().expireAfterWrite(Duration.ofSeconds(1)).build();
+    cache.put(1, 1);
+    cache.asMap().compute(2, (k, v) -> {
+      if (v == null) {
+        return k;
+      }
+      return v;
+    });
+    Assert.assertEquals(new Integer(1), cache.getIfPresent(1));
+    Assert.assertEquals(new Integer(2), cache.getIfPresent(2));
+    Thread.sleep(1001);
+    Assert.assertEquals(2, cache.size());
+    Assert.assertNull(cache.getIfPresent(1));
+    Assert.assertNull(cache.getIfPresent(2));
+    cache.cleanUp();
+    cache.put(3, 3);
+    Assert.assertEquals(1, cache.size());
+    Assert.assertNull(cache.getIfPresent(1));
+    Assert.assertEquals(new Integer(3), cache.getIfPresent(3));
+
+  }
+
   private KVTable createTable(List<String> joinKeys) {
     return KVTable.create(
-        new StateFactory(dbPath),
+        new StateFactory(dbPath, new ConstantFunctionContext(new Configuration()).getMetricGroup()),
         primaryKeys,
         joinKeys,
-        2,
         arcticSchema,
         config);
   }
@@ -266,13 +296,23 @@ public class KVTableTest {
       Assert.assertEquals(0, values.size());
       return;
     }
+    Assert.assertEquals(expects.length, values.size());
+    values = values.stream().sorted(compare()).collect(Collectors.toList());
+    List<RowData> expects_ = Arrays.stream(expects).sorted(compare()).collect(Collectors.toList());
     for (int i = 0; i < expects.length; i = i + 1) {
       // Get the key and expected value at the current index and the next index
-      RowData expected = expects[i];
+      RowData expected = expects_.get(i);
 
       RowData actual = values.get(i);
       assertRecord(expected, actual);
     }
+  }
+
+  private Comparator<RowData> compare() {
+    return Comparator
+        .comparingInt((RowData o) -> o.getInt(0))
+        .thenComparing(o -> o.getString(1))
+        .thenComparingInt(o -> o.getInt(2));
   }
 
   private void assertRecord(RowData expected, RowData actual) {

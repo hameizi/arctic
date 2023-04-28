@@ -19,72 +19,70 @@
 package com.netease.arctic.flink.lookup;
 
 import com.netease.arctic.utils.map.RocksDBBackend;
-import org.apache.flink.configuration.Configuration;
+import org.apache.flink.metrics.MetricGroup;
+import org.apache.flink.util.Preconditions;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.CompressionType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static com.netease.arctic.flink.table.descriptors.ArcticValidator.ROCKSDB_AUTO_COMPACTIONS;
-import static com.netease.arctic.flink.table.descriptors.ArcticValidator.ROCKSDB_WRITING_THREADS;
-
 public class StateFactory {
   private static final Logger LOG = LoggerFactory.getLogger(StateFactory.class);
 
   private final RocksDBBackend db;
+  private final MetricGroup metricGroup;
 
-  public StateFactory(String dbPath) {
+  public StateFactory(String dbPath, MetricGroup metricGroup) {
+    Preconditions.checkNotNull(metricGroup);
+
     this.db = RocksDBBackend.getOrCreateInstance(dbPath);
+    this.metricGroup = metricGroup;
   }
 
   public RocksDBRecordState createRecordState(
       String columnFamilyName,
-      long lruMaximumSize,
       BinaryRowDataSerializerWrapper keySerializer,
       BinaryRowDataSerializerWrapper valueSerializer,
-      Configuration config) {
+      LookupOptions lookupOptions) {
     ColumnFamilyOptions columnFamilyOptions = new ColumnFamilyOptions();
-    configColumnFamilyOption(config, columnFamilyOptions);
+    configColumnFamilyOption(columnFamilyOptions);
 
     db.addColumnFamily(columnFamilyName, columnFamilyOptions);
     return
         new RocksDBRecordState(
             db,
             columnFamilyName,
-            lruMaximumSize,
             keySerializer,
             valueSerializer,
-            config.getInteger(ROCKSDB_WRITING_THREADS));
+            metricGroup,
+            lookupOptions);
   }
 
-  public RocksDBSetSpillState createSetState(
+  public RocksDBSetMemoryState createSetState(
       String columnFamilyName,
-      long lruMaximumSize,
       BinaryRowDataSerializerWrapper keySerialization,
       BinaryRowDataSerializerWrapper elementSerialization,
       BinaryRowDataSerializerWrapper valueSerializer,
-      Configuration config) {
+      LookupOptions lookupOptions) {
     ColumnFamilyOptions columnFamilyOptions = new ColumnFamilyOptions();
-    configColumnFamilyOption(config, columnFamilyOptions);
+    configColumnFamilyOption(columnFamilyOptions);
     columnFamilyOptions.setCompressionType(CompressionType.NO_COMPRESSION);
 
     db.addColumnFamily(columnFamilyName, columnFamilyOptions);
 
-    return new RocksDBSetSpillState(
+    return new RocksDBSetMemoryState(
         db,
         columnFamilyName,
-        lruMaximumSize,
         keySerialization,
         elementSerialization,
         valueSerializer,
-        config.getInteger(ROCKSDB_WRITING_THREADS));
+        metricGroup,
+        lookupOptions);
   }
 
 
-  private void configColumnFamilyOption(Configuration config, ColumnFamilyOptions columnFamilyOptions) {
-    if (!config.get(ROCKSDB_AUTO_COMPACTIONS)) {
-      columnFamilyOptions.setDisableAutoCompactions(true);
-      LOG.info("set db options[disable_auto_compactions={}]", true);
-    }
+  private void configColumnFamilyOption(ColumnFamilyOptions columnFamilyOptions) {
+    columnFamilyOptions.setDisableAutoCompactions(true);
+    LOG.info("set db options[disable_auto_compactions={}]", true);
   }
 }

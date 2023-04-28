@@ -70,7 +70,8 @@ import static com.netease.arctic.flink.table.KafkaConnectorOptionsUtil.createVal
 import static com.netease.arctic.flink.table.KafkaConnectorOptionsUtil.getKafkaProperties;
 import static com.netease.arctic.flink.table.descriptors.ArcticValidator.ARCTIC_LOG_KAFKA_COMPATIBLE_ENABLE;
 import static com.netease.arctic.flink.table.descriptors.ArcticValidator.LOOKUP_CACHE_MAX_ROWS;
-import static com.netease.arctic.flink.table.descriptors.ArcticValidator.LOOKUP_RELOADING_INTERVAL_SECONDS;
+import static com.netease.arctic.flink.table.descriptors.ArcticValidator.LOOKUP_CACHE_TTL_AFTER_WRITE;
+import static com.netease.arctic.flink.table.descriptors.ArcticValidator.LOOKUP_RELOADING_INTERVAL;
 import static com.netease.arctic.flink.table.descriptors.ArcticValidator.ROCKSDB_AUTO_COMPACTIONS;
 import static com.netease.arctic.flink.table.descriptors.ArcticValidator.ROCKSDB_WRITING_THREADS;
 import static com.netease.arctic.flink.table.descriptors.ArcticValidator.SCAN_STARTUP_MODE_TIMESTAMP;
@@ -237,10 +238,11 @@ public class DynamicTableFactory implements DynamicTableSourceFactory, DynamicTa
 
     // lookup
     options.add(LOOKUP_CACHE_MAX_ROWS);
-    options.add(LOOKUP_RELOADING_INTERVAL_SECONDS);
+    options.add(LOOKUP_RELOADING_INTERVAL);
 
     options.add(ROCKSDB_AUTO_COMPACTIONS);
     options.add(ROCKSDB_WRITING_THREADS);
+    options.add(LOOKUP_CACHE_TTL_AFTER_WRITE);
     return options;
   }
 

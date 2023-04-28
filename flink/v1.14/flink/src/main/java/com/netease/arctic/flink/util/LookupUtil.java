@@ -16,37 +16,19 @@
  * limitations under the License.
  */
 
-package com.netease.arctic.flink.lookup;
+package com.netease.arctic.flink.util;
 
-public class RocksDBRecord {
-  private byte[] keyBytes;
-  private byte[] valueBytes;
+import com.netease.arctic.flink.lookup.LookupOptions;
+import com.netease.arctic.flink.table.descriptors.ArcticValidator;
+import org.apache.flink.configuration.Configuration;
 
-  private OpType opType;
+public class LookupUtil {
 
-  private RocksDBRecord(OpType opType, byte[] keyBytes, byte[] valueBytes) {
-    this.keyBytes = keyBytes;
-    this.valueBytes = valueBytes;
-    this.opType = opType;
-  }
-
-  public static RocksDBRecord of(OpType opType, byte[] keyBytes, byte[] valueBytes) {
-    return new RocksDBRecord(opType, keyBytes, valueBytes);
-  }
-
-  public byte[] keyBytes() {
-    return keyBytes;
-  }
-
-  public byte[] valueBytes() {
-    return valueBytes;
-  }
-
-  public OpType opType() {
-    return opType;
-  }
-
-  enum OpType {
-    PUT_BYTES, DELETE_BYTES
+  public static LookupOptions convertLookupOptions(Configuration config) {
+    return new LookupOptions.Builder()
+        .lruMaximumSize(config.get(ArcticValidator.LOOKUP_CACHE_MAX_ROWS))
+        .writeRecordThreadNum(config.get(ArcticValidator.ROCKSDB_WRITING_THREADS))
+        .ttlAfterWrite(config.get(ArcticValidator.LOOKUP_CACHE_TTL_AFTER_WRITE))
+        .build();
   }
 }

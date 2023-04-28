@@ -50,8 +50,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static com.netease.arctic.flink.table.descriptors.ArcticValidator.LOOKUP_CACHE_MAX_ROWS;
-
 /**
  * Flink table api that generates source operators.
  */
@@ -229,14 +227,11 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
     Configuration config = new Configuration();
     properties.forEach(config::setString);
 
-    long cacheMaxRows = config.getLong(LOOKUP_CACHE_MAX_ROWS);
-
     return
         new ArcticLookupFunction(
             arcticTable,
             joinKeyNames,
             projectedSchema,
-            cacheMaxRows,
             filters,
             tableLoader,
             config);
