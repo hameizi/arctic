@@ -18,18 +18,16 @@
 
 package com.netease.arctic.flink.lookup;
 
+import com.netease.arctic.ArcticIOException;
+import com.netease.arctic.utils.map.RocksDBBackend;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.metrics.MetricGroup;
+import org.apache.flink.shaded.guava30.com.google.common.cache.Cache;
+import org.apache.flink.shaded.guava30.com.google.common.cache.CacheBuilder;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.flink.util.Preconditions;
-
-import org.apache.flink.shaded.guava30.com.google.common.cache.Cache;
-import org.apache.flink.shaded.guava30.com.google.common.cache.CacheBuilder;
-
-import com.netease.arctic.ArcticIOException;
-import com.netease.arctic.utils.map.RocksDBBackend;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.MutableColumnFamilyOptions;
 import org.rocksdb.RocksDBException;
@@ -58,273 +56,277 @@ import java.util.stream.IntStream;
  * @param <V> the type of the cache's values, which are not permitted to be null
  */
 public abstract class RocksDBCacheState<V> {
-    private static final Logger LOG = LoggerFactory.getLogger(RocksDBCacheState.class);
-    protected RocksDBBackend rocksDB;
-    protected final boolean secondaryIndexMemoryMapEnabled;
+  private static final Logger LOG = LoggerFactory.getLogger(RocksDBCacheState.class);
+  protected RocksDBBackend rocksDB;
+  protected final boolean secondaryIndexMemoryMapEnabled;
 
-    protected Cache<ByteArrayWrapper, V> guavaCache;
+  protected Cache<ByteArrayWrapper, V> guavaCache;
 
-    protected final String columnFamilyName;
-    protected final ColumnFamilyHandle columnFamilyHandle;
-    protected BinaryRowDataSerializerWrapper keySerializer;
+  protected final String columnFamilyName;
+  protected final ColumnFamilyHandle columnFamilyHandle;
+  protected BinaryRowDataSerializerWrapper keySerializer;
 
-    protected BinaryRowDataSerializerWrapper valueSerializer;
-    private ExecutorService writeRocksDBService;
-    private final AtomicBoolean initialized = new AtomicBoolean(false);
-    protected Queue<LookupRecord> lookupRecordsQueue;
-    private final int maxQueueSize = 5000000;
+  protected BinaryRowDataSerializerWrapper valueSerializer;
+  private ExecutorService writeRocksDBService;
+  private final AtomicBoolean initialized = new AtomicBoolean(false);
+  protected Queue<LookupRecord> lookupRecordsQueue;
+  private final int maxQueueSize = 5000000;
 
-    private final int writeRocksDBThreadNum;
-    private List<Future<?>> writeRocksDBThreadFutures;
-    private final AtomicReference<Throwable> writingThreadException = new AtomicReference<>();
-    protected final MetricGroup metricGroup;
-    private final LookupOptions lookupOptions;
+  private final int writeRocksDBThreadNum;
+  private List<Future<?>> writeRocksDBThreadFutures;
+  private final AtomicReference<Throwable> writingThreadException = new AtomicReference<>();
+  protected final MetricGroup metricGroup;
+  private final LookupOptions lookupOptions;
 
-    public RocksDBCacheState(
-        RocksDBBackend rocksDB,
-        String columnFamilyName,
-        BinaryRowDataSerializerWrapper keySerializer,
-        BinaryRowDataSerializerWrapper valueSerializer,
-        MetricGroup metricGroup,
-        LookupOptions lookupOptions,
-        boolean secondaryIndexMemoryMapEnabled) {
-        this.rocksDB = rocksDB;
-        this.columnFamilyName = columnFamilyName;
-        this.keySerializer = keySerializer;
-        this.valueSerializer = valueSerializer;
-        this.columnFamilyHandle = rocksDB.getColumnFamilyHandle(columnFamilyName);
-        this.writeRocksDBThreadNum = lookupOptions.writeRecordThreadNum();
-        this.secondaryIndexMemoryMapEnabled = secondaryIndexMemoryMapEnabled;
-        this.metricGroup = metricGroup;
-        this.lookupOptions = lookupOptions;
+  public RocksDBCacheState(
+      RocksDBBackend rocksDB,
+      String columnFamilyName,
+      BinaryRowDataSerializerWrapper keySerializer,
+      BinaryRowDataSerializerWrapper valueSerializer,
+      MetricGroup metricGroup,
+      LookupOptions lookupOptions,
+      boolean secondaryIndexMemoryMapEnabled) {
+    this.rocksDB = rocksDB;
+    this.columnFamilyName = columnFamilyName;
+    this.keySerializer = keySerializer;
+    this.valueSerializer = valueSerializer;
+    this.columnFamilyHandle = rocksDB.getColumnFamilyHandle(columnFamilyName);
+    this.writeRocksDBThreadNum = lookupOptions.writeRecordThreadNum();
+    this.secondaryIndexMemoryMapEnabled = secondaryIndexMemoryMapEnabled;
+    this.metricGroup = metricGroup;
+    this.lookupOptions = lookupOptions;
+  }
+
+  public void open() {
+    writeRocksDBService = Executors.newFixedThreadPool(writeRocksDBThreadNum);
+
+    if (secondaryIndexMemoryMapEnabled) {
+      CacheBuilder<Object, Object> cacheBuilder = CacheBuilder.newBuilder();
+      if (lookupOptions.isTTLAfterWriteValidated()) {
+        cacheBuilder.expireAfterWrite(lookupOptions.ttlAfterWrite());
+      }
+      guavaCache = cacheBuilder.build();
+    } else {
+      guavaCache = CacheBuilder.newBuilder().maximumSize(lookupOptions.lruMaximumSize()).build();
     }
 
-    public void open() {
-        writeRocksDBService = Executors.newFixedThreadPool(writeRocksDBThreadNum);
+    metricGroup.gauge(columnFamilyName + "_queue_size", () -> lookupRecordsQueue.size());
 
-        if (secondaryIndexMemoryMapEnabled) {
-            CacheBuilder<Object, Object> cacheBuilder = CacheBuilder.newBuilder();
-            if (lookupOptions.isTTLAfterWriteValidated()) {
-                cacheBuilder.expireAfterWrite(lookupOptions.ttlAfterWrite());
-            }
-            guavaCache = cacheBuilder.build();
-        } else {
-            guavaCache = CacheBuilder.newBuilder().maximumSize(lookupOptions.lruMaximumSize()).build();
-        }
+    lookupRecordsQueue = new ConcurrentLinkedQueue<>();
+    writeRocksDBThreadFutures =
+        IntStream.range(0, writeRocksDBThreadNum).mapToObj(value ->
+                writeRocksDBService.submit(
+                    new WriteRocksDBTask(
+                        String.format("writing-rocksDB-cf_%s-thread-%d", columnFamilyName, value),
+                        secondaryIndexMemoryMapEnabled)))
+            .collect(Collectors.toList());
+  }
 
-        metricGroup.gauge(columnFamilyName + "_queue_size", () -> lookupRecordsQueue.size());
+  @VisibleForTesting
+  public byte[] serializeKey(RowData key) throws IOException {
+    return serializeKey(keySerializer, key);
+  }
 
-        lookupRecordsQueue = new ConcurrentLinkedQueue<>();
-        writeRocksDBThreadFutures =
-            IntStream.range(0, writeRocksDBThreadNum).mapToObj(value ->
-                    writeRocksDBService.submit(
-                        new WriteRocksDBTask(
-                            String.format("writing-rocksDB-cf_%s-thread-%d", columnFamilyName, value),
-                            secondaryIndexMemoryMapEnabled)))
-                .collect(Collectors.toList());
+  @VisibleForTesting
+  public byte[] serializeKey(
+      BinaryRowDataSerializerWrapper keySerializer,
+      RowData key) throws IOException {
+    // key has a different RowKind would serialize different byte[], so unify the RowKind as INSERT.
+    byte[] result;
+    if (key.getRowKind() != RowKind.INSERT) {
+      RowKind rowKind = key.getRowKind();
+      key.setRowKind(RowKind.INSERT);
+      result = keySerializer.serialize(key);
+      key.setRowKind(rowKind);
+      return result;
     }
+    key.setRowKind(RowKind.INSERT);
+    return keySerializer.serialize(key);
+  }
 
-    @VisibleForTesting
-    public byte[] serializeKey(RowData key) throws IOException {
-        return serializeKey(keySerializer, key);
-    }
+  protected ByteArrayWrapper wrap(byte[] bytes) {
+    return new ByteArrayWrapper(bytes, bytes.length);
+  }
 
-    @VisibleForTesting
-    public byte[] serializeKey(
-        BinaryRowDataSerializerWrapper keySerializer,
-        RowData key) throws IOException {
-        // key has a different RowKind would serialize different byte[], so unify the RowKind as INSERT.
-        byte[] result;
-        if (key.getRowKind() != RowKind.INSERT) {
-            RowKind rowKind = key.getRowKind();
-            key.setRowKind(RowKind.INSERT);
-            result = keySerializer.serialize(key);
-            key.setRowKind(rowKind);
-            return result;
-        }
-        key.setRowKind(RowKind.INSERT);
-        return keySerializer.serialize(key);
-    }
-
-    protected ByteArrayWrapper wrap(byte[] bytes) {
-        return new ByteArrayWrapper(bytes, bytes.length);
-    }
-
-    protected void putIntoQueue(LookupRecord lookupRecord) {
-        Preconditions.checkNotNull(lookupRecord);
+  protected void putIntoQueue(LookupRecord lookupRecord) {
+    Preconditions.checkNotNull(lookupRecord);
 //    try {
-        // Putting the record into the queue, if the queue is full, it will block.
-        lookupRecordsQueue.add(lookupRecord);
+    // Putting the record into the queue, if the queue is full, it will block.
+    lookupRecordsQueue.add(lookupRecord);
 //    } catch (InterruptedException e) {
 //      Thread.currentThread().interrupt();
 //      throw new FlinkRuntimeException(e);
 //    }
+  }
+
+  public abstract void flush();
+
+  /**
+   * Waiting for the writing threads completed.
+   */
+  public void waitWriteRocksDBDone() {
+    long every5SecondsPrint = Long.MIN_VALUE;
+
+    while (true) {
+      if (lookupRecordsQueue.isEmpty()) {
+        initialized.set(true);
+        break;
+      } else if (every5SecondsPrint < System.currentTimeMillis()) {
+        LOG.info("Currently rocksDB queue size is {}.", lookupRecordsQueue.size());
+        every5SecondsPrint = System.currentTimeMillis() + 5000;
+      }
+    }
+    // Wait for all threads to finish
+    for (Future<?> future : writeRocksDBThreadFutures) {
+      try {
+        // wait for the task to complete, with a timeout of 5 seconds
+        future.get(5, TimeUnit.SECONDS);
+      } catch (TimeoutException e) {
+        // task took too long, interrupt the thread and terminate the task
+        future.cancel(true);
+      } catch (InterruptedException | ExecutionException e) {
+        // handle other exceptions
+        throw new FlinkRuntimeException(e);
+      }
+    }
+  }
+
+  public boolean initialized() {
+    return initialized.get();
+  }
+
+  protected LookupRecord.OpType convertToOpType(RowKind rowKind) {
+    switch (rowKind) {
+      case INSERT:
+      case UPDATE_AFTER:
+        return LookupRecord.OpType.PUT_BYTES;
+      case DELETE:
+      case UPDATE_BEFORE:
+        return LookupRecord.OpType.DELETE_BYTES;
+      default:
+        throw new IllegalArgumentException(String.format("Not support this rowKind %s", rowKind));
+    }
+  }
+
+  /**
+   * Closes the RocksDB instance and cleans up the Guava cache.
+   * <p>Additionally, it shuts down the write-service and clears the RocksDB record queue if they exist.
+   */
+  public void close() {
+    rocksDB.close();
+    guavaCache.cleanUp();
+    if (writeRocksDBService != null) {
+      writeRocksDBService.shutdown();
+      writeRocksDBService = null;
+    }
+    if (lookupRecordsQueue != null) {
+      lookupRecordsQueue.clear();
+      lookupRecordsQueue = null;
+    }
+  }
+
+  public void initializationCompleted() {
+    try {
+      rocksDB.rocksDB.enableAutoCompaction(Collections.singletonList(columnFamilyHandle));
+      MutableColumnFamilyOptions mutableColumnFamilyOptions =
+          MutableColumnFamilyOptions.builder()
+              .setDisableAutoCompactions(false)
+              .build();
+      rocksDB.setOptions(columnFamilyHandle, mutableColumnFamilyOptions);
+    } catch (RocksDBException e) {
+      throw new ArcticIOException(e);
     }
 
-    public abstract void flush();
+    LOG.info("set db options[disable_auto_compactions={}]", false);
+  }
 
-    /**
-     * Waiting for the writing threads completed.
-     */
-    public void waitWriteRocksDBDone() {
-        long every5SecondsPrint = Long.MIN_VALUE;
+  protected void checkConcurrentFailed() {
+    if (writingThreadException.get() != null) {
+      LOG.error("Check concurrent writing threads.", writingThreadException.get());
+      throw new FlinkRuntimeException(writingThreadException.get());
+    }
+  }
 
-        while (true) {
-            if (lookupRecordsQueue.isEmpty()) {
-                initialized.set(true);
+  /**
+   * This task is running during the initialization phase to write data{@link LookupRecord} to RocksDB.
+   * <p>During the initialization phase, the Merge-on-Read approach is used to retrieve data,
+   * which will only return INSERT data.
+   * When there are multiple entries with the same primary key, only one entry will be returned.
+   * <p>During the initialization phase, the incremental pull approach is also used to retrieve data that include
+   * four {@link RowKind} rowKinds, -D, +I, -U, and +U.
+   */
+  class WriteRocksDBTask implements Runnable {
+
+    private final String name;
+    private final boolean secondaryIndexMemoryMapEnabled;
+
+    public WriteRocksDBTask(String name, boolean secondaryIndexMemoryMapEnabled) {
+      this.name = name;
+      this.secondaryIndexMemoryMapEnabled = secondaryIndexMemoryMapEnabled;
+    }
+
+    @Override
+    public void run() {
+      LOG.info("{} starting.", name);
+      try {
+        while (!initialized.get()) {
+          LookupRecord record = lookupRecordsQueue.poll();
+          if (record != null) {
+            switch (record.opType()) {
+              case PUT_BYTES:
+                put(record);
                 break;
-            } else if (every5SecondsPrint < System.currentTimeMillis()) {
-                LOG.info("Currently rocksDB queue size is {}.", lookupRecordsQueue.size());
-                every5SecondsPrint = System.currentTimeMillis() + 5000;
+              case DELETE_BYTES:
+                delete(record);
+                break;
+              default:
+                throw new IllegalArgumentException(String.format("Not support this OpType %s", record.opType()));
             }
+          }
         }
-        // Wait for all threads to finish
-        for (Future<?> future : writeRocksDBThreadFutures) {
-            try {
-                // wait for the task to complete, with a timeout of 5 seconds
-                future.get(5, TimeUnit.SECONDS);
-            } catch (TimeoutException e) {
-                // task took too long, interrupt the thread and terminate the task
-                future.cancel(true);
-            } catch (InterruptedException | ExecutionException e) {
-                // handle other exceptions
-                throw new FlinkRuntimeException(e);
-            }
-        }
+      } catch (Throwable e) {
+        LOG.error("writing failed:", e);
+        writingThreadException.set(e);
+      }
+      LOG.info("{} stopping.", name);
     }
 
-    public boolean initialized() {
-        return initialized.get();
+    private void delete(LookupRecord record) {
+      if (secondaryIndexMemoryMapEnabled) {
+        deleteSecondaryCache(record.keyBytes(), record.valueBytes());
+      } else {
+        rocksDB.delete(columnFamilyName, record.keyBytes());
+        // manually clear the record
+        record = null;
+      }
     }
 
-    protected LookupRecord.OpType convertToOpType(RowKind rowKind) {
-        switch (rowKind) {
-            case INSERT:
-            case UPDATE_AFTER:
-                return LookupRecord.OpType.PUT_BYTES;
-            case DELETE:
-            case UPDATE_BEFORE:
-                return LookupRecord.OpType.DELETE_BYTES;
-            default:
-                throw new IllegalArgumentException(String.format("Not support this rowKind %s", rowKind));
-        }
+    private void put(LookupRecord record) {
+      if (secondaryIndexMemoryMapEnabled) {
+        putSecondaryCache(record.keyBytes(), record.valueBytes());
+      } else {
+        rocksDB.put(columnFamilyHandle, record.keyBytes(), record.valueBytes());
+        // manually clear the record
+        record = null;
+      }
     }
+  }
 
-    /**
-     * Closes the RocksDB instance and cleans up the Guava cache.
-     * <p>Additionally, it shuts down the write-service and clears the RocksDB record queue if they exist.
-     */
-    public void close() {
-        rocksDB.close();
-        guavaCache.cleanUp();
-        if (writeRocksDBService != null) {
-            writeRocksDBService.shutdown();
-            writeRocksDBService = null;
-        }
-        if (lookupRecordsQueue != null) {
-            lookupRecordsQueue.clear();
-            lookupRecordsQueue = null;
-        }
-    }
+  void putSecondaryCache(byte[] key, byte[] value) {
+    ByteArrayWrapper keyWrap = wrap(key);
+    ByteArrayWrapper valueWrap = wrap(value);
+    putCacheValue(guavaCache, keyWrap, valueWrap);
+  }
 
-    public void initializationCompleted() {
-        try {
-            rocksDB.rocksDB.enableAutoCompaction(Collections.singletonList(columnFamilyHandle));
-            MutableColumnFamilyOptions mutableColumnFamilyOptions =
-                MutableColumnFamilyOptions.builder()
-                    .setDisableAutoCompactions(false)
-                    .build();
-            rocksDB.setOptions(columnFamilyHandle, mutableColumnFamilyOptions);
-        } catch (RocksDBException e) {
-            throw new ArcticIOException(e);
-        }
+  void deleteSecondaryCache(byte[] key, byte[] value) {
+    ByteArrayWrapper keyWrap = wrap(key);
+    ByteArrayWrapper valueWrap = wrap(value);
+    removeValue(guavaCache, keyWrap, valueWrap);
+  }
 
-        LOG.info("set db options[disable_auto_compactions={}]", false);
-    }
+  void putCacheValue(Cache<ByteArrayWrapper, V> cache, ByteArrayWrapper keyWrap, ByteArrayWrapper valueWrap) {
+  }
 
-    protected void checkConcurrentFailed() {
-        if (writingThreadException.get() != null) {
-            LOG.error("Check concurrent writing threads.", writingThreadException.get());
-            throw new FlinkRuntimeException(writingThreadException.get());
-        }
-    }
-
-    /**
-     * This task is running during the initialization phase to write data{@link LookupRecord} to RocksDB.
-     * <p>During the initialization phase, the Merge-on-Read approach is used to retrieve data,
-     * which will only return INSERT data.
-     * When there are multiple entries with the same primary key, only one entry will be returned.
-     * <p>During the initialization phase, the incremental pull approach is also used to retrieve data that include
-     * four {@link RowKind} rowKinds, -D, +I, -U, and +U.
-     */
-    class WriteRocksDBTask implements Runnable {
-
-        private final String name;
-        private final boolean secondaryIndexMemoryMapEnabled;
-
-        public WriteRocksDBTask(String name, boolean secondaryIndexMemoryMapEnabled) {
-            this.name = name;
-            this.secondaryIndexMemoryMapEnabled = secondaryIndexMemoryMapEnabled;
-        }
-
-        @Override
-        public void run() {
-            LOG.info("{} starting.", name);
-            try {
-                while (!initialized.get()) {
-                    LookupRecord record = lookupRecordsQueue.poll();
-                    if (record != null) {
-                        switch (record.opType()) {
-                            case PUT_BYTES:
-                                put(record);
-                                break;
-                            case DELETE_BYTES:
-                                delete(record);
-                                break;
-                            default:
-                                throw new IllegalArgumentException(String.format("Not support this OpType %s", record.opType()));
-                        }
-                    }
-                }
-            } catch (Throwable e) {
-                LOG.error("writing failed:", e);
-                writingThreadException.set(e);
-            }
-            LOG.info("{} stopping.", name);
-        }
-
-        private void delete(LookupRecord record) {
-            if (secondaryIndexMemoryMapEnabled) {
-                deleteSecondaryCache(record.keyBytes(), record.valueBytes());
-            } else {
-                rocksDB.delete(columnFamilyName, record.keyBytes());
-            }
-        }
-
-        private void put(LookupRecord record) {
-            if (secondaryIndexMemoryMapEnabled) {
-                putSecondaryCache(record.keyBytes(), record.valueBytes());
-            } else {
-                rocksDB.put(columnFamilyHandle, record.keyBytes(), record.valueBytes());
-            }
-        }
-    }
-
-    void putSecondaryCache(byte[] key, byte[] value) {
-        ByteArrayWrapper keyWrap = wrap(key);
-        ByteArrayWrapper valueWrap = wrap(value);
-        putCacheValue(guavaCache, keyWrap, valueWrap);
-    }
-
-    void deleteSecondaryCache(byte[] key, byte[] value) {
-        ByteArrayWrapper keyWrap = wrap(key);
-        ByteArrayWrapper valueWrap = wrap(value);
-        removeValue(guavaCache, keyWrap, valueWrap);
-    }
-
-    void putCacheValue(Cache<ByteArrayWrapper, V> cache, ByteArrayWrapper keyWrap, ByteArrayWrapper valueWrap) {
-    }
-
-    void removeValue(Cache<ByteArrayWrapper, V> cache, ByteArrayWrapper keyWrap, ByteArrayWrapper valueWrap) {
-    }
+  void removeValue(Cache<ByteArrayWrapper, V> cache, ByteArrayWrapper keyWrap, ByteArrayWrapper valueWrap) {
+  }
 }
