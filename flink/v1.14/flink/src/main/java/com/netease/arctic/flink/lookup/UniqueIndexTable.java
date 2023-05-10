@@ -18,9 +18,9 @@
 
 package com.netease.arctic.flink.lookup;
 
+import com.netease.arctic.flink.lookup.filter.RowDataPredicate;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.types.RowKind;
-
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.types.Types;
 
@@ -34,84 +34,99 @@ import java.util.stream.Collectors;
 import static com.netease.arctic.flink.lookup.LookupMetrics.UNIQUE_CACHE_SIZE;
 
 /**
- * Use unique index to lookup. Working for the situation which join keys include the arctic table's primary keys.
+ * Use a unique index to lookup. Working for the situation where the join keys include the arctic table's primary keys.
  */
+@SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 public class UniqueIndexTable implements KVTable {
-    private static final long serialVersionUID = 1L;
-    protected final RocksDBRecordState recordState;
+  private static final long serialVersionUID = 1L;
+  protected final RocksDBRecordState recordState;
 
-    protected int[] uniqueKeyIndexMapping;
+  protected int[] uniqueKeyIndexMapping;
+  private final Optional<RowDataPredicate> rowDataPredicate;
 
-    public UniqueIndexTable(
-        StateFactory stateFactory,
-        List<String> primaryKeys,
-        Schema projectSchema,
-        LookupOptions lookupOptions) {
+  public UniqueIndexTable(
+      StateFactory stateFactory,
+      List<String> primaryKeys,
+      Schema projectSchema,
+      LookupOptions lookupOptions,
+      Optional<RowDataPredicate> rowDataPredicate) {
 
-        recordState =
-            stateFactory.createRecordState(
-                "uniqueIndex",
-                createKeySerializer(projectSchema, primaryKeys),
-                createValueSerializer(projectSchema),
-                lookupOptions);
-        List<String> fields = projectSchema.asStruct().fields()
-            .stream().map(Types.NestedField::name).collect(Collectors.toList());
-        this.uniqueKeyIndexMapping = primaryKeys.stream().mapToInt(fields::indexOf).toArray();
+    recordState =
+        stateFactory.createRecordState(
+            "uniqueIndex",
+            createKeySerializer(projectSchema, primaryKeys),
+            createValueSerializer(projectSchema),
+            lookupOptions);
+    List<String> fields = projectSchema.asStruct().fields()
+        .stream().map(Types.NestedField::name).collect(Collectors.toList());
+    this.uniqueKeyIndexMapping = primaryKeys.stream().mapToInt(fields::indexOf).toArray();
+    this.rowDataPredicate = rowDataPredicate;
+  }
+
+  @Override
+  public void open() {
+    recordState.open();
+    recordState.metricGroup.gauge(UNIQUE_CACHE_SIZE, () -> recordState.guavaCache.size());
+  }
+
+  @Override
+  public List<RowData> get(RowData key) throws IOException {
+    Optional<RowData> record = recordState.get(key);
+    return record.map(Collections::singletonList).orElse(Collections.emptyList());
+  }
+
+  @Override
+  public void upsert(Iterator<RowData> dataStream) throws IOException {
+    while (dataStream.hasNext()) {
+      RowData value = dataStream.next();
+      if (predicate(value)) {
+        continue;
+      }
+      RowData key = new KeyRowData(uniqueKeyIndexMapping, value);
+
+      if (value.getRowKind() == RowKind.INSERT || value.getRowKind() == RowKind.UPDATE_AFTER) {
+        recordState.put(key, value);
+      } else {
+        recordState.delete(key);
+      }
     }
+  }
 
-    @Override
-    public void open() {
-        recordState.open();
-        recordState.metricGroup.gauge(UNIQUE_CACHE_SIZE, () -> recordState.guavaCache.size());
+  @Override
+  public void initialize(Iterator<RowData> dataStream) throws IOException {
+    while (dataStream.hasNext()) {
+      RowData value = dataStream.next();
+      if (predicate(value)) {
+        continue;
+      }
+
+      RowData key = new KeyRowData(uniqueKeyIndexMapping, value);
+      recordState.batchWrite(key, value);
     }
+    recordState.checkConcurrentFailed();
+    recordState.flush();
+  }
 
-    @Override
-    public List<RowData> get(RowData key) throws IOException {
-        Optional<RowData> record = recordState.get(key);
-        return record.map(Collections::singletonList).orElse(Collections.emptyList());
-    }
+  protected boolean predicate(RowData value) {
+    return rowDataPredicate.map(predicate -> !predicate.test(value)).orElse(false);
+  }
 
-    @Override
-    public void upsert(Iterator<RowData> dataStream) throws IOException {
-        while (dataStream.hasNext()) {
-            RowData value = dataStream.next();
-            RowData key = new KeyRowData(uniqueKeyIndexMapping, value);
+  @Override
+  public boolean initialized() {
+    return recordState.initialized();
+  }
 
-            if (value.getRowKind() == RowKind.INSERT || value.getRowKind() == RowKind.UPDATE_AFTER) {
-                recordState.put(key, value);
-            } else {
-                recordState.delete(key);
-            }
-        }
-    }
+  @Override
+  public void waitInitializationCompleted() {
+    LOG.info("Waiting for Record State initialization");
+    recordState.waitWriteRocksDBDone();
+    LOG.info("The concurrent threads have finished writing data into the Record State.");
+    recordState.initializationCompleted();
+  }
 
-    @Override
-    public void initialize(Iterator<RowData> dataStream) throws IOException {
-        while (dataStream.hasNext()) {
-            RowData value = dataStream.next();
-            RowData key = new KeyRowData(uniqueKeyIndexMapping, value);
-            recordState.batchWrite(key, value);
-        }
-        recordState.checkConcurrentFailed();
-        recordState.flush();
-    }
-
-    @Override
-    public boolean initialized() {
-        return recordState.initialized();
-    }
-
-    @Override
-    public void waitInitializationCompleted() {
-        LOG.info("Waiting for Record State initialization");
-        recordState.waitWriteRocksDBDone();
-        LOG.info("The concurrent threads have finished writing data into the Record State.");
-        recordState.initializationCompleted();
-    }
-
-    @Override
-    public void close() {
-        recordState.close();
-    }
+  @Override
+  public void close() {
+    recordState.close();
+  }
 
 }

@@ -18,10 +18,10 @@
 
 package com.netease.arctic.flink.lookup;
 
+import com.netease.arctic.flink.lookup.filter.RowDataPredicate;
+import com.netease.arctic.utils.SchemaUtil;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.data.RowData;
-
-import com.netease.arctic.utils.SchemaUtil;
 import org.apache.iceberg.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +32,7 @@ import java.io.Serializable;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import static com.netease.arctic.flink.util.LookupUtil.convertLookupOptions;
@@ -41,92 +42,96 @@ import static com.netease.arctic.flink.util.LookupUtil.convertLookupOptions;
  * It includes methods for initializing and updating the lookup table,
  * as well as getting results by key and cleaning up the cache.
  */
+@SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 public interface KVTable extends Serializable, Closeable {
-    Logger LOG = LoggerFactory.getLogger(KVTable.class);
+  Logger LOG = LoggerFactory.getLogger(KVTable.class);
 
-    /**
-     * Initialize the lookup table
-     */
-    void open();
+  /**
+   * Initialize the lookup table
+   */
+  void open();
 
-    /**
-     * Get the result by the key.
-     *
-     * @throws IOException Serialize the rowData failed.
-     */
-    List<RowData> get(RowData key) throws IOException;
+  /**
+   * Get the result by the key.
+   *
+   * @throws IOException Serialize the rowData failed.
+   */
+  List<RowData> get(RowData key) throws IOException;
 
-    /**
-     * Upsert the {@link KVTable} by the Change table dataStream.
-     *
-     * @throws IOException Serialize the rowData failed.
-     */
-    void upsert(Iterator<RowData> dataStream) throws IOException;
+  /**
+   * Upsert the {@link KVTable} by the Change table dataStream.
+   *
+   * @throws IOException Serialize the rowData failed.
+   */
+  void upsert(Iterator<RowData> dataStream) throws IOException;
 
-    /**
-     * Initial the {@link  KVTable} by the MoR dataStream.
-     *
-     * @param dataStream
-     * @throws IOException
-     */
-    void initialize(Iterator<RowData> dataStream) throws IOException;
+  /**
+   * Initial the {@link  KVTable} by the MoR dataStream.
+   *
+   * @param dataStream
+   * @throws IOException
+   */
+  void initialize(Iterator<RowData> dataStream) throws IOException;
 
-    /**
-     * @return if initialization is completed.
-     */
-    boolean initialized();
+  /**
+   * @return if initialization is completed.
+   */
+  boolean initialized();
 
-    /**
-     * Waiting for the initialization completed, and enable auto compaction at the end of the initialization.
-     */
-    void waitInitializationCompleted();
+  /**
+   * Waiting for the initialization completed, and enable auto compaction at the end of the initialization.
+   */
+  void waitInitializationCompleted();
 
-    /**
-     * Try to clean up the cache manually, due to the lookup_cache.ttl-after-write configuration.
-     * <p>lookup_cache.ttl-after-writ</p> Only works in SecondaryIndexTable.
-     */
-    default void cleanUp() {
+  /**
+   * Try to clean up the cache manually, due to the lookup_cache.ttl-after-write configuration.
+   * <p>lookup_cache.ttl-after-writ</p> Only works in SecondaryIndexTable.
+   */
+  default void cleanUp() {
+  }
+
+  void close();
+
+  default BinaryRowDataSerializerWrapper createKeySerializer(
+      Schema arcticTableSchema, List<String> keys) {
+    Schema keySchema = SchemaUtil.convertFieldsToSchema(arcticTableSchema, keys);
+    return new BinaryRowDataSerializerWrapper(keySchema);
+  }
+
+  default BinaryRowDataSerializerWrapper createValueSerializer(Schema projectSchema) {
+    return new BinaryRowDataSerializerWrapper(projectSchema);
+  }
+
+  static KVTable create(
+      StateFactory stateFactory,
+      List<String> primaryKeys,
+      List<String> joinKeys,
+      Schema projectSchema,
+      Configuration config,
+      Optional<RowDataPredicate> rowDataPredicate) {
+    Set<String> joinKeySet = new HashSet<>(joinKeys);
+    Set<String> primaryKeySet = new HashSet<>(primaryKeys);
+    if (joinKeySet.size() > primaryKeySet.size() && joinKeySet.containsAll(primaryKeySet)) {
+      LOG.info("create unique index table, join keys contain all primary keys, unique keys are {}, join keys are {}.",
+          primaryKeys.toArray(), joinKeys.toArray());
+      return
+          new UniqueIndexTable(stateFactory, joinKeys, projectSchema,
+              convertLookupOptions(config),
+              rowDataPredicate);
     }
-
-    void close();
-
-    default BinaryRowDataSerializerWrapper createKeySerializer(
-        Schema arcticTableSchema, List<String> keys) {
-        Schema keySchema = SchemaUtil.convertFieldsToSchema(arcticTableSchema, keys);
-        return new BinaryRowDataSerializerWrapper(keySchema);
+    if (new HashSet<>(primaryKeys).equals(new HashSet<>(joinKeys))) {
+      LOG.info("create unique index table, unique keys are {}, join keys are {}.",
+          primaryKeys.toArray(), joinKeys.toArray());
+      return
+          new UniqueIndexTable(stateFactory, primaryKeys, projectSchema,
+              convertLookupOptions(config), rowDataPredicate);
+    } else {
+      LOG.info("create secondary index table, unique keys are {}, join keys are {}.",
+          primaryKeys.toArray(), joinKeys.toArray());
+      return
+          new SecondaryIndexTable(stateFactory, primaryKeys, joinKeys, projectSchema,
+              convertLookupOptions(config),
+              rowDataPredicate);
     }
-
-    default BinaryRowDataSerializerWrapper createValueSerializer(Schema projectSchema) {
-        return new BinaryRowDataSerializerWrapper(projectSchema);
-    }
-
-    static KVTable create(
-        StateFactory stateFactory,
-        List<String> primaryKeys,
-        List<String> joinKeys,
-        Schema projectSchema,
-        Configuration config) {
-        Set<String> joinKeySet = new HashSet<>(joinKeys);
-        Set<String> primaryKeySet = new HashSet<>(primaryKeys);
-        if (joinKeySet.size() > primaryKeySet.size() && joinKeySet.containsAll(primaryKeySet)) {
-            LOG.info("create unique index table, join keys contain all primary keys, unique keys are {}, join keys are {}.",
-                primaryKeys.toArray(), joinKeys.toArray());
-            return
-                new UniqueIndexTable(stateFactory, joinKeys, projectSchema,
-                    convertLookupOptions(config));
-        }
-        if (new HashSet<>(primaryKeys).equals(new HashSet<>(joinKeys))) {
-            LOG.info("create unique index table, unique keys are {}, join keys are {}.",
-                primaryKeys.toArray(), joinKeys.toArray());
-            return
-                new UniqueIndexTable(stateFactory, primaryKeys, projectSchema,
-                    convertLookupOptions(config));
-        } else {
-            LOG.info("create secondary index table, unique keys are {}, join keys are {}.",
-                primaryKeys.toArray(), joinKeys.toArray());
-            return
-                new SecondaryIndexTable(stateFactory, primaryKeys, joinKeys, projectSchema,
-                    convertLookupOptions(config));
-        }
-    }
+  }
 }

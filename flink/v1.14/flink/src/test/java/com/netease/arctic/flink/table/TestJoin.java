@@ -286,7 +286,9 @@ public class TestJoin extends FlinkTestBase {
 
     TableResult result = exec("select u.name, u.id, dim.info, dim.name dname from `user` as u left join  " + table +
         "/*+OPTIONS('lookup.cache.max-rows'='10002')*/ for system_time as of u.ptm as dim" +
-        " on u.id = dim.id  ");
+        " on u.id = dim.id where dim.name >'a' " +
+        "and dim.id > 1 " +
+        "and dim.name > from_unixtime(unix_timestamp(),'yyyy-MM-dd')");
 
     CommonTestUtils.waitForJobStatus(result.getJobClient().get(), Lists.newArrayList(JobStatus.RUNNING),
         Deadline.fromNow(Duration.ofSeconds(30)));

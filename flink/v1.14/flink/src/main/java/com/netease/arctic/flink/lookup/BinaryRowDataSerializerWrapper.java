@@ -25,7 +25,6 @@ import org.apache.flink.table.data.binary.BinaryRowData;
 import org.apache.flink.table.runtime.typeutils.BinaryRowDataSerializer;
 import org.apache.flink.table.runtime.typeutils.RowDataSerializer;
 import org.apache.flink.table.types.logical.RowType;
-
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.flink.FlinkSchemaUtil;
 
@@ -37,40 +36,40 @@ import java.io.Serializable;
  */
 public class BinaryRowDataSerializerWrapper implements Serializable {
 
-    private static final long serialVersionUID = 1L;
-    protected BinaryRowDataSerializer serializer;
-    private RowDataSerializer rowDataSerializer;
-    private DataOutputSerializer outputView;
-    private DataInputDeserializer inputView;
-    private final Schema schema;
+  private static final long serialVersionUID = 1L;
+  protected BinaryRowDataSerializer serializer;
+  private RowDataSerializer rowDataSerializer;
+  private DataOutputSerializer outputView;
+  private DataInputDeserializer inputView;
+  private final Schema schema;
 
-    public BinaryRowDataSerializerWrapper(Schema schema) {
-        this.serializer = new BinaryRowDataSerializer(schema.asStruct().fields().size());
-        this.schema = schema;
-    }
+  public BinaryRowDataSerializerWrapper(Schema schema) {
+    this.serializer = new BinaryRowDataSerializer(schema.asStruct().fields().size());
+    this.schema = schema;
+  }
 
-    public byte[] serialize(RowData rowData) throws IOException {
-        if (rowDataSerializer == null) {
-            RowType rowType = FlinkSchemaUtil.convert(schema);
-            rowDataSerializer = new RowDataSerializer(rowType);
-        }
-        BinaryRowData binaryRowData = rowDataSerializer.toBinaryRow(rowData);
-        if (outputView == null) {
-            outputView = new DataOutputSerializer(32);
-        }
-        outputView.clear();
-        serializer.serialize(binaryRowData, outputView);
-        return outputView.getCopyOfBuffer();
+  public byte[] serialize(RowData rowData) throws IOException {
+    if (rowDataSerializer == null) {
+      RowType rowType = FlinkSchemaUtil.convert(schema);
+      rowDataSerializer = new RowDataSerializer(rowType);
     }
+    BinaryRowData binaryRowData = rowDataSerializer.toBinaryRow(rowData);
+    if (outputView == null) {
+      outputView = new DataOutputSerializer(32);
+    }
+    outputView.clear();
+    serializer.serialize(binaryRowData, outputView);
+    return outputView.getCopyOfBuffer();
+  }
 
-    public RowData deserialize(byte[] recordBytes) throws IOException {
-        if (recordBytes == null) {
-            return null;
-        }
-        if (inputView == null) {
-            inputView = new DataInputDeserializer();
-        }
-        inputView.setBuffer(recordBytes);
-        return serializer.deserialize(inputView);
+  public RowData deserialize(byte[] recordBytes) throws IOException {
+    if (recordBytes == null) {
+      return null;
     }
+    if (inputView == null) {
+      inputView = new DataInputDeserializer();
+    }
+    inputView.setBuffer(recordBytes);
+    return serializer.deserialize(inputView);
+  }
 }

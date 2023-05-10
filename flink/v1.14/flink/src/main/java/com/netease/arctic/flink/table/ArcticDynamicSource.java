@@ -19,12 +19,15 @@
 package com.netease.arctic.flink.table;
 
 import com.netease.arctic.flink.lookup.ArcticLookupFunction;
+import com.netease.arctic.flink.lookup.filter.RowDataPredicate;
+import com.netease.arctic.flink.lookup.filter.RowDataPredicateExpressionVisitor;
 import com.netease.arctic.flink.util.FilterUtil;
 import com.netease.arctic.flink.util.IcebergAndFlinkFilters;
 import com.netease.arctic.table.ArcticTable;
 import com.netease.arctic.utils.SchemaUtil;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.source.DataStreamScanProvider;
 import org.apache.flink.table.connector.source.DynamicTableSource;
@@ -36,18 +39,27 @@ import org.apache.flink.table.connector.source.abilities.SupportsLimitPushDown;
 import org.apache.flink.table.connector.source.abilities.SupportsProjectionPushDown;
 import org.apache.flink.table.connector.source.abilities.SupportsWatermarkPushDown;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.expressions.CallExpression;
 import org.apache.flink.table.expressions.ResolvedExpression;
+import org.apache.flink.table.functions.BuiltInFunctionDefinitions;
+import org.apache.flink.table.functions.FunctionIdentifier;
+import org.apache.flink.table.types.DataType;
+import org.apache.flink.table.types.utils.TypeConversions;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.expressions.Expression;
+import org.apache.iceberg.flink.FlinkSchemaUtil;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
+import org.apache.iceberg.types.Types;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -66,7 +78,8 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
 
   private int[] projectFields;
   private List<Expression> filters;
-  private ArcticTableLoader tableLoader;
+  private ResolvedExpression flinkExpression;
+  private final ArcticTableLoader tableLoader;
 
   @Nullable
   protected WatermarkStrategy<RowData> watermarkStrategy;
@@ -96,7 +109,8 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
                              Map<String, String> properties,
                              ArcticTableLoader tableLoader,
                              int[] projectFields,
-                             List<Expression> filters) {
+                             List<Expression> filters,
+                             ResolvedExpression flinkExpression) {
     this.tableName = tableName;
     this.arcticDynamicSource = arcticDynamicSource;
     this.arcticTable = arcticTable;
@@ -104,6 +118,7 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
     this.tableLoader = tableLoader;
     this.projectFields = projectFields;
     this.filters = filters;
+    this.flinkExpression = flinkExpression;
   }
 
   @Override
@@ -124,7 +139,7 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
   public DynamicTableSource copy() {
     return
         new ArcticDynamicSource(
-            tableName, arcticDynamicSource, arcticTable, properties, tableLoader, projectFields, filters);
+            tableName, arcticDynamicSource, arcticTable, properties, tableLoader, projectFields, filters, flinkExpression);
   }
 
   @Override
@@ -136,6 +151,15 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
   public Result applyFilters(List<ResolvedExpression> filters) {
     IcebergAndFlinkFilters icebergAndFlinkFilters = FilterUtil.convertFlinkExpressToIceberg(filters);
     this.filters = icebergAndFlinkFilters.expressions();
+
+    if (filters.size() == 1) {
+      flinkExpression = filters.get(0);
+    } else if (filters.size() >= 2) {
+      flinkExpression = and(filters.get(0), filters.get(1));
+      for (int i = 2; i < filters.size(); i++) {
+        flinkExpression = and(flinkExpression, filters.subList(i, i + 1).get(0));
+      }
+    }
 
     if (arcticDynamicSource instanceof SupportsFilterPushDown) {
       return ((SupportsFilterPushDown) arcticDynamicSource).applyFilters(filters);
@@ -151,6 +175,15 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
     } else {
       return false;
     }
+  }
+
+  private CallExpression and(ResolvedExpression left, ResolvedExpression right) {
+    return new CallExpression(
+        FunctionIdentifier.of(BuiltInFunctionDefinitions.AND.getName()),
+        BuiltInFunctionDefinitions.AND,
+        Arrays.asList(left, right),
+        DataTypes.BOOLEAN()
+    );
   }
 
   @Override
@@ -227,6 +260,7 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
     Configuration config = new Configuration();
     properties.forEach(config::setString);
 
+    Optional<RowDataPredicate> rowDataPredicate = generatePredicate(projectedSchema, flinkExpression);
     return
         new ArcticLookupFunction(
             arcticTable,
@@ -234,6 +268,30 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
             projectedSchema,
             filters,
             tableLoader,
-            config);
+            config,
+            rowDataPredicate);
+  }
+
+  protected Optional<RowDataPredicate> generatePredicate(
+      final Schema projectedSchema, final ResolvedExpression flinkExpression) {
+
+    final Map<String, Integer> fieldIndexMap = new HashMap<>();
+    final Map<String, DataType> fieldDataTypeMap = new HashMap<>();
+    List<Types.NestedField> fields = projectedSchema.asStruct().fields();
+    for (int i = 0; i < fields.size(); i++) {
+      Types.NestedField field = fields.get(i);
+      fieldIndexMap.put(field.name(), i);
+      fieldDataTypeMap.put(field.name(), TypeConversions.fromLogicalToDataType(FlinkSchemaUtil.convert(field.type())));
+    }
+
+    RowDataPredicateExpressionVisitor visitor = generateExpressionVisitor(fieldIndexMap, fieldDataTypeMap);
+    return flinkExpression.accept(visitor);
+  }
+
+  protected RowDataPredicateExpressionVisitor generateExpressionVisitor(
+      Map<String, Integer> fieldIndexMap, Map<String, DataType> fieldDataTypeMap) {
+    return new RowDataPredicateExpressionVisitor(
+        fieldIndexMap,
+        fieldDataTypeMap);
   }
 }
