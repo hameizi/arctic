@@ -151,7 +151,7 @@ public class RowDataPredicateExpressionVisitor extends ExpressionDefaultVisitor<
             call));
   }
 
-  private Optional<RowDataPredicate> arithmeticOperator(
+  protected Optional<RowDataPredicate> arithmeticOperator(
       RowDataPredicate.Opt arithmeticOpt, CallExpression call) {
     List<ResolvedExpression> resolvedChildren = call.getResolvedChildren();
     Optional<RowDataPredicate> leftPredicate = resolvedChildren.get(0).accept(this);
@@ -227,7 +227,7 @@ public class RowDataPredicateExpressionVisitor extends ExpressionDefaultVisitor<
     });
   }
 
-  private Optional<RowDataPredicate> castOperator(CallExpression call) {
+  protected Optional<RowDataPredicate> castOperator(CallExpression call) {
     List<ResolvedExpression> resolvedChildren = call.getResolvedChildren();
     Optional<RowDataPredicate> leftPredicate = resolvedChildren.get(0).accept(this);
     if (resolvedChildren.size() != 2) {
@@ -277,7 +277,7 @@ public class RowDataPredicateExpressionVisitor extends ExpressionDefaultVisitor<
     });
   }
 
-  private Optional<RowDataPredicate> renderUnaryOperator(
+  protected Optional<RowDataPredicate> renderUnaryOperator(
       RowDataPredicate.Opt opt,
       ResolvedExpression resolvedExpression) {
     if (resolvedExpression instanceof FieldReferenceExpression) {
@@ -287,7 +287,7 @@ public class RowDataPredicateExpressionVisitor extends ExpressionDefaultVisitor<
     return Optional.empty();
   }
 
-  private Optional<RowDataPredicate> renderBinaryOperator(
+  protected Optional<RowDataPredicate> renderBinaryOperator(
       RowDataPredicate.Opt opt,
       List<ResolvedExpression> resolvedExpressions) {
     Optional<RowDataPredicate> leftPredicate = resolvedExpressions.get(0).accept(this);

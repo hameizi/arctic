@@ -49,11 +49,11 @@ import static org.junit.Assert.assertTrue;
  * Test for {@link RowDataPredicate}.
  */
 public class TestRowDataPredicateAllFieldTypes extends TestRowDataPredicateBase {
-  RowDataPredicateExpressionVisitor visitor;
-  final Map<String, Integer> fieldIndexMap = new HashMap<>();
-  final Map<String, DataType> fieldDataTypeMap = new HashMap<>();
+  protected RowDataPredicateExpressionVisitor visitor;
+  protected final Map<String, Integer> fieldIndexMap = new HashMap<>();
+  protected final Map<String, DataType> fieldDataTypeMap = new HashMap<>();
   List<Column> columns = new ArrayList<>();
-  ResolvedSchema schema;
+  protected ResolvedSchema schema;
 
   @Before
   public void setUp() {
@@ -251,7 +251,7 @@ public class TestRowDataPredicateAllFieldTypes extends TestRowDataPredicateBase 
     assertFalse(predicate.test(generateRowData("f9", 7571781600004L)));
   }
 
-  private RowData generateRowData(String fieldName, Object val) {
+  protected RowData generateRowData(String fieldName, Object val) {
     int index = Integer.parseInt(fieldName.substring(1));
     Object[] objects = new Object[columns.size()];
     objects[index] = val;

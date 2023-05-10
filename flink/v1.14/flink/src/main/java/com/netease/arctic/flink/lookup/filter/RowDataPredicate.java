@@ -293,7 +293,7 @@ public class RowDataPredicate implements Predicate<RowData>, Serializable {
         .toString();
   }
 
-  enum Opt {
+  public enum Opt {
     AND,
     OR,
     EQUALS,
