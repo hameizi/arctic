@@ -30,7 +30,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static com.netease.arctic.flink.lookup.LookupMetrics.SECONDARY_CACHE_SIZE;
@@ -41,7 +40,6 @@ import static com.netease.arctic.flink.lookup.LookupMetrics.SECONDARY_CACHE_SIZE
  * <p>Example: <code>SELECT * FROM t1 JOIN t2 for system_time as of t1.pt as dim ON t1.user_name = dim.user_name</code>
  * <p>t2 as an arctic table with primary keys: user_name, city_name.
  */
-@SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 public class SecondaryIndexTable extends UniqueIndexTable {
   private static final long serialVersionUID = 1L;
   private final int[] secondaryKeyIndexMapping;
@@ -55,7 +53,7 @@ public class SecondaryIndexTable extends UniqueIndexTable {
       List<String> joinKeys,
       Schema projectSchema,
       LookupOptions lookupOptions,
-      Optional<RowDataPredicate> rowDataPredicate) {
+      RowDataPredicate rowDataPredicate) {
     super(stateFactory, primaryKeys, projectSchema, lookupOptions, rowDataPredicate);
 
     this.setState =

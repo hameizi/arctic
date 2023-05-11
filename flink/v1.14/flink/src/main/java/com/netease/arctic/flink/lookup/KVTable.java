@@ -32,7 +32,6 @@ import java.io.Serializable;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 
 import static com.netease.arctic.flink.util.LookupUtil.convertLookupOptions;
@@ -42,7 +41,6 @@ import static com.netease.arctic.flink.util.LookupUtil.convertLookupOptions;
  * It includes methods for initializing and updating the lookup table,
  * as well as getting results by key and cleaning up the cache.
  */
-@SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 public interface KVTable extends Serializable, Closeable {
   Logger LOG = LoggerFactory.getLogger(KVTable.class);
 
@@ -108,7 +106,7 @@ public interface KVTable extends Serializable, Closeable {
       List<String> joinKeys,
       Schema projectSchema,
       Configuration config,
-      Optional<RowDataPredicate> rowDataPredicate) {
+      RowDataPredicate rowDataPredicate) {
     Set<String> joinKeySet = new HashSet<>(joinKeys);
     Set<String> primaryKeySet = new HashSet<>(primaryKeys);
     if (joinKeySet.size() > primaryKeySet.size() && joinKeySet.containsAll(primaryKeySet)) {

@@ -44,7 +44,6 @@ import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
@@ -58,7 +57,6 @@ import static org.apache.flink.util.Preconditions.checkArgument;
 /**
  * This is a lookup function for an arctic table.
  */
-@SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 public class ArcticLookupFunction extends TableFunction<RowData> {
   private static final Logger LOG = LoggerFactory.getLogger(ArcticLookupFunction.class);
   private static final long serialVersionUID = 1L;
@@ -74,7 +72,7 @@ public class ArcticLookupFunction extends TableFunction<RowData> {
   private MixedIncrementalLoader<RowData> incrementalLoader;
   private final Configuration config;
   private transient AtomicLong lookupLoadingTimeMs;
-  private final Optional<RowDataPredicate> rowDataPredicate;
+  private final RowDataPredicate rowDataPredicate;
 
   public ArcticLookupFunction(
       ArcticTable arcticTable,
@@ -83,7 +81,7 @@ public class ArcticLookupFunction extends TableFunction<RowData> {
       List<Expression> filters,
       ArcticTableLoader tableLoader,
       Configuration config,
-      Optional<RowDataPredicate> rowDataPredicate) {
+      RowDataPredicate rowDataPredicate) {
     checkArgument(
         arcticTable.isKeyedTable(),
         String.format(

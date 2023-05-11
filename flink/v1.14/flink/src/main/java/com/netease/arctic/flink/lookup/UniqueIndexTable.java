@@ -36,20 +36,19 @@ import static com.netease.arctic.flink.lookup.LookupMetrics.UNIQUE_CACHE_SIZE;
 /**
  * Use a unique index to lookup. Working for the situation where the join keys include the arctic table's primary keys.
  */
-@SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 public class UniqueIndexTable implements KVTable {
   private static final long serialVersionUID = 1L;
   protected final RocksDBRecordState recordState;
 
   protected int[] uniqueKeyIndexMapping;
-  private final Optional<RowDataPredicate> rowDataPredicate;
+  private final RowDataPredicate rowDataPredicate;
 
   public UniqueIndexTable(
       StateFactory stateFactory,
       List<String> primaryKeys,
       Schema projectSchema,
       LookupOptions lookupOptions,
-      Optional<RowDataPredicate> rowDataPredicate) {
+      RowDataPredicate rowDataPredicate) {
 
     recordState =
         stateFactory.createRecordState(
@@ -108,7 +107,8 @@ public class UniqueIndexTable implements KVTable {
   }
 
   protected boolean predicate(RowData value) {
-    return rowDataPredicate.map(predicate -> !predicate.test(value)).orElse(false);
+    return
+        Optional.ofNullable(rowDataPredicate).map(predicate -> !predicate.test(value)).orElse(false);
   }
 
   @Override

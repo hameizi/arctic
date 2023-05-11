@@ -269,11 +269,14 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
             filters,
             tableLoader,
             config,
-            rowDataPredicate);
+            rowDataPredicate.orElse(null));
   }
 
   protected Optional<RowDataPredicate> generatePredicate(
       final Schema projectedSchema, final ResolvedExpression flinkExpression) {
+    if (flinkExpression == null) {
+      return Optional.empty();
+    }
 
     final Map<String, Integer> fieldIndexMap = new HashMap<>();
     final Map<String, DataType> fieldDataTypeMap = new HashMap<>();

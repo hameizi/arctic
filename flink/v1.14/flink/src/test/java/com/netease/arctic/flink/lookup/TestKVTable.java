@@ -394,7 +394,7 @@ public class TestKVTable extends TestRowDataPredicateBase {
         joinKeys,
         arcticSchema,
         config,
-        rowDataPredicate);
+        rowDataPredicate.orElse(null));
   }
 
   private KVTable createTable(List<String> joinKeys) {
