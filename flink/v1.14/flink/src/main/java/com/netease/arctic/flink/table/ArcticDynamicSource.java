@@ -72,14 +72,14 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
 
   protected final String tableName;
 
-  private final ScanTableSource arcticDynamicSource;
-  private final ArcticTable arcticTable;
-  private final Map<String, String> properties;
+  protected final ScanTableSource arcticDynamicSource;
+  protected final ArcticTable arcticTable;
+  protected final Map<String, String> properties;
 
-  private int[] projectFields;
-  private List<Expression> filters;
-  private ResolvedExpression flinkExpression;
-  private final ArcticTableLoader tableLoader;
+  protected int[] projectFields;
+  protected List<Expression> filters;
+  protected ResolvedExpression flinkExpression;
+  protected final ArcticTableLoader tableLoader;
 
   @Nullable
   protected WatermarkStrategy<RowData> watermarkStrategy;
@@ -177,7 +177,7 @@ public class ArcticDynamicSource implements ScanTableSource, SupportsFilterPushD
     }
   }
 
-  private CallExpression and(ResolvedExpression left, ResolvedExpression right) {
+  protected CallExpression and(ResolvedExpression left, ResolvedExpression right) {
     return new CallExpression(
         FunctionIdentifier.of(BuiltInFunctionDefinitions.AND.getName()),
         BuiltInFunctionDefinitions.AND,
