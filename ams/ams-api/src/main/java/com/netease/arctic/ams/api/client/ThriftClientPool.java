@@ -150,15 +150,6 @@ public class ThriftClientPool<T extends org.apache.thrift.TServiceClient> {
       }
 
       @Override
-      public boolean validateObject(PooledObject<ThriftClient<T>> p) {
-        ThriftClient<T> client = p.getObject();
-        if (client.isDisConnected() || !pingFactory.ping(client.iface())) {
-          return false;
-        }
-        return super.validateObject(p);
-      }
-
-      @Override
       public void destroyObject(PooledObject<ThriftClient<T>> p) throws Exception {
         p.getObject().closeClient();
         super.destroyObject(p);
