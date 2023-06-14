@@ -2,14 +2,19 @@
 在默认的 AMS 配置中，我们已经初始化了一个名为 `local_catalog` 的基于本地文件系统的集群以方便你的测试。 用户可以通过 AMS Dashboard 提供的 Catalog 管理功能导入更多测试或线上集群。新增 Catalog 前，请阅读以下指引，根据自己的实际需求进行选择创建。
 
 ## 创建 Catalog
-Arctic 中 catalog 为一组表的命名空间，在 catalog 之下会再分到不同的 database 中，database 下则是不同的 table，catalog.database.table 组成了一张表在 Arctic 中唯一的名称。 在实际应用场景下 catalog 一般对应着一个元数据服务，比如大数据中经常使用的 Hive Metastore， Arctic MetaService 也可以作为一个元数据服务， 另外定义 catalog 时还需要选择它下面所使用的表格式，当前 Arctic 支持的表格式包括：[Iceberg](../concepts/table-formats.md#iceberg-format) 、[Mixed Hive](../concepts/table-formats.md#mixed-hive-format)、[Mixed Iceberg](../concepts/table-formats.md#mixed-iceberg-format)。创建方法如下：
+Arctic 中 catalog 为一组库、表的命名空间，在 catalog 之下会再分到不同的 database 中，database 下则是不同的 table，catalog.database.table 组成了一张表在 Arctic 中唯一的名称。 
+在实际应用场景下 catalog 一般对应着一个元数据服务，比如大数据中经常使用的 Hive Metastore， Arctic MetaService 也可以作为一个元数据服务; 为了区分元数据的存储方式，
+Arctic将Catalog 类型分为 Internal Catalog和External Catalog。使用Arcitc MetaService作为元数据服务的catalog是Internal Catalog, 其它都是External Catalog;
+External Catalog 在创建的时候需要选择它元数据的存储后端，比如Hive、Hadoop、Custom。
+另外定义 catalog 时还需要选择它下面所使用的表格式，当前 Arctic 支持的表格式包括：[Iceberg](../concepts/table-formats.md#iceberg-format) 、[Mixed Hive](../concepts/table-formats.md#mixed-hive-format)、[Mixed Iceberg](../concepts/table-formats.md#mixed-iceberg-format)。创建方法如下：
 ![create catalog](../images/admin/create_catalog.png)
 创建 catalog 的详细参数如下：
 
 | **配置项**      | **可用值**                                                   | **描述**                                                     |
 | --------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | name            | 只支持数字、字母、_、- , 以字母开头（建议字母小写）          | catalog名称                                                  |
-| metastore       | Arctic Metastore(代表使用 AMS 存储元数据),Hive Metastore(代表使用 HMS 存储元数据),Hadoop (对应 iceberg 的 Hadoop catalog), Custom(其他 iceberg 的 catalog 实现) | 存放表元数据的存储类型                                       |
+| type            | Internal Catalog, External Catalog                    | catalog类型                                                  |
+| metastore       | type 为External Catalog时必选; Arctic Metastore(代表使用 AMS 存储元数据),Hive Metastore(代表使用 HMS 存储元数据),Hadoop (对应 iceberg 的 Hadoop catalog), Custom(其他 iceberg 的 catalog 实现) | 存放表元数据的存储类型                                       |
 | table format    | Iceberg 、Mixed Hive、Mixed  Iceberg                         | 数据存储的表格式，当前只有 metastore 类型 为Hive Metastore 时同时支持 Mixed  Hive/Iceberg 两种，Arctic Metastore 支持 Mixed Iceberg类型。其他 metastore 类型均只支持 Iceberg, 当前一个 Metastore 只支持一种 TableFormat, 未来会支持多种 |
 | core-site       | 上传 hadoop 集群的 core-site.xml                             | core-site.xml                                                |
 | hdfs-site       | 上传 hadoop 集群的 hdfs-site.xml                             | hdfs-site.xml                                                |
