@@ -18,6 +18,9 @@
 
 package com.netease.arctic.ams.api.client;
 
+import java.io.File;
+import java.util.Map;
+import javax.security.auth.login.Configuration;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.retry.ExponentialBackoffRetry;
@@ -33,12 +36,17 @@ import java.nio.charset.StandardCharsets;
 public class ZookeeperService {
 
   private static volatile ZookeeperService instance;
-  private CuratorFramework zkClient;
-  private String zkServerAddress;
+  private final CuratorFramework zkClient;
+  private final String zkServerAddress;
 
   private ZookeeperService(String zkServerAddress) {
     this.zkServerAddress = zkServerAddress;
-    this.zkClient = newClient();
+    this.zkClient = newClient(null);
+  }
+
+  private ZookeeperService(String zkServerAddress, Map<String, String> conf) {
+    this.zkServerAddress = zkServerAddress;
+    this.zkClient = newClient(conf);
   }
 
   public static ZookeeperService getInstance(String zkServerAddress) {
@@ -52,9 +60,24 @@ public class ZookeeperService {
     return instance;
   }
 
-  private CuratorFramework newClient() {
+  public static ZookeeperService getInstance(String zkServerAddress, Map<String, String> conf) {
+    if (instance == null) {
+      synchronized (ZookeeperService.class) {
+        if (instance == null) {
+          instance = new ZookeeperService(zkServerAddress);
+        }
+      }
+    }
+    return instance;
+  }
+
+  private CuratorFramework newClient(Map<String, String> conf) {
     ZKClientConfig zkClientConfig = new ZKClientConfig();
-    zkClientConfig.setProperty(ZKClientConfig.ENABLE_CLIENT_SASL_KEY, "false");
+    if (conf != null) {
+      setupZookeeperAuth(conf);
+    } else {
+      zkClientConfig.setProperty(ZKClientConfig.ENABLE_CLIENT_SASL_KEY, "false");
+    }
     ExponentialBackoffRetry retryPolicy = new ExponentialBackoffRetry(1000, 3, 5000);
     CuratorFramework client = CuratorFrameworkFactory.builder()
         .connectString(zkServerAddress)
@@ -65,6 +88,13 @@ public class ZookeeperService {
         .build();
     client.start();
     return client;
+  }
+
+  private void setupZookeeperAuth(Map<String, String> conf) {
+    System.setProperty(ZKClientConfig.LOGIN_CONTEXT_NAME_KEY, "AmoroZooKeeperClient");
+    String principal = conf.get("principal");
+    File keyTabFile = new File(conf.get("keyTabFile"));
+    Configuration.setConfiguration(new JaasConfiguration("AmoroZooKeeperClient", principal, keyTabFile.getName()));
   }
 
   public boolean exist(String path) throws Exception {
