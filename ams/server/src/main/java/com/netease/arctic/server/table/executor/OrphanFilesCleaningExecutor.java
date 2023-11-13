@@ -53,6 +53,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class OrphanFilesCleaningExecutor extends BaseTableExecutor {
@@ -292,6 +293,9 @@ public class OrphanFilesCleaningExecutor extends BaseTableExecutor {
       LOG.warn("Iceberg RewriteFiles commit failed on clear danglingDeleteFiles, but ignore", e);
       return 0;
     }
+    LOG.info("dangling delete files {}", danglingDeleteFiles.stream()
+        .map(DeleteFile::path)
+        .collect(Collectors.joining(",")));
     return danglingDeleteFiles.size();
   }
 
