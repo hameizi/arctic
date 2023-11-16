@@ -131,9 +131,10 @@ public class OptimizingPlanner extends OptimizingEvaluator {
 
     double maxInputSize =
         CompatiblePropertyUtil.propertyAsLong(
-            getArcticTable().properties(),
-            TableProperties.SELF_OPTIMIZING_MAX_INPUT_FILE_SIZE_PER_THREAD,
-            TableProperties.SELF_OPTIMIZING_MAX_INPUT_FILE_SIZE_PER_THREAD_DEFAULT) * availableCore;
+                getArcticTable().properties(),
+                TableProperties.SELF_OPTIMIZING_MAX_INPUT_FILE_SIZE_PER_THREAD,
+                TableProperties.SELF_OPTIMIZING_MAX_INPUT_FILE_SIZE_PER_THREAD_DEFAULT)
+            * availableCore;
     actualPartitionPlans = Lists.newArrayList();
     long actualInputSize = 0;
     for (PartitionEvaluator evaluator : evaluators) {
@@ -161,7 +162,8 @@ public class OptimizingPlanner extends OptimizingEvaluator {
       }
     }
     long endTime = System.nanoTime();
-    LOG.info("{} finish plan, type = {}, get {} tasks, cost {} ns, {} ms maxInputSize {} actualInputSize {}",
+    LOG.info(
+        "{} finish plan, type = {}, get {} tasks, cost {} ns, {} ms maxInputSize {} actualInputSize {}",
         tableRuntime.getTableIdentifier(),
         getOptimizingType(),
         tasks.size(),

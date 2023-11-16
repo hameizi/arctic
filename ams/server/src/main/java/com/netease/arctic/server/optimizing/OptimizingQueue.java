@@ -357,7 +357,10 @@ public class OptimizingQueue extends PersistentBase implements OptimizingService
     }
     List<TableIdentifier> plannedTables = Lists.newArrayList();
     for (TableRuntime tableRuntime : scheduledTables) {
-      LOG.info("Planning table {} group {}", tableRuntime.getTableIdentifier(), optimizerGroup.getName());
+      LOG.info(
+          "Planning table {} group {}",
+          tableRuntime.getTableIdentifier(),
+          optimizerGroup.getName());
       try {
         AmoroTable<?> table = tableManager.loadTable(tableRuntime.getTableIdentifier());
         OptimizingPlanner planner =
