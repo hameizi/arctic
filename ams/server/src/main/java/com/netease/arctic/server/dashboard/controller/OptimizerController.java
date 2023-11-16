@@ -37,6 +37,8 @@ import com.netease.arctic.server.table.ServerTableIdentifier;
 import com.netease.arctic.server.table.TableRuntime;
 import com.netease.arctic.server.table.TableService;
 import io.javalin.http.Context;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.ws.rs.BadRequestException;
 import java.util.ArrayList;
@@ -49,6 +51,7 @@ import java.util.stream.Collectors;
  * The controller that handles optimizer requests.
  */
 public class OptimizerController {
+  private static final Logger LOG = LoggerFactory.getLogger(OptimizerController.class);
   private static final String ALL_GROUP = "all";
   private final TableService tableService;
   private final DefaultOptimizingService optimizerManager;
@@ -69,7 +72,9 @@ public class OptimizerController {
     int offset = (page - 1) * pageSize;
 
     List<TableRuntime> tableRuntimes = new ArrayList<>();
+    LOG.info("getOptimizerTables start list tables from system db");
     List<ServerTableIdentifier> tables = tableService.listManagedTables();
+    LOG.info("getOptimizerTables end list tables from system db, count {}", tables.size());
     for (ServerTableIdentifier identifier : tables) {
       TableRuntime tableRuntime = tableService.getRuntime(identifier);
       if (tableRuntime == null) {
@@ -79,6 +84,7 @@ public class OptimizerController {
         tableRuntimes.add(tableRuntime);
       }
     }
+    LOG.info("getOptimizerTables start sort tableRuntimes");
     tableRuntimes.sort((o1, o2) -> {
       // first we compare the status , and then we compare the start time when status are equal;
       int statDiff = o1.getOptimizingStatus().compareTo(o2.getOptimizingStatus());
@@ -90,8 +96,10 @@ public class OptimizerController {
         return statDiff;
       }
     });
+    LOG.info("getOptimizerTables end sort tableRuntimes, count {}", tableRuntimes.size());
     PageResult<TableOptimizingInfo> amsPageResult = PageResult.of(tableRuntimes,
         offset, pageSize, OptimizingUtil::buildTableOptimizeInfo);
+    LOG.info("getOptimizerTables end buildTableOptimizeInfo");
     ctx.json(OkResponse.of(amsPageResult));
   }
 

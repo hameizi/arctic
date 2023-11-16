@@ -184,7 +184,14 @@ public class ArcticServiceContainer {
   }
 
   private void startThriftServer(TServer server, String threadName) {
-    Thread thread = new Thread(server::serve, threadName);
+    Thread thread = new Thread(() -> {
+      try {
+        server.serve();
+        LOG.error("Thrift server {} have stopped", threadName);
+      } catch (Throwable t) {
+        LOG.error("Thrift server {} encountered an unknown exception", threadName, t);
+      }
+    }, threadName);
     thread.setDaemon(true);
     thread.start();
     LOG.info(threadName + " has been started");
