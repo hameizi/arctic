@@ -18,9 +18,12 @@ import com.netease.arctic.server.catalog.ExternalCatalog;
 import com.netease.arctic.server.catalog.InternalCatalog;
 import com.netease.arctic.server.catalog.ServerCatalog;
 import com.netease.arctic.server.exception.AlreadyExistsException;
+import com.netease.arctic.server.exception.ArcticRuntimeException;
 import com.netease.arctic.server.exception.IllegalMetadataException;
 import com.netease.arctic.server.exception.ObjectNotExistsException;
+import com.netease.arctic.server.exception.PersistenceException;
 import com.netease.arctic.server.optimizing.OptimizingStatus;
+import com.netease.arctic.server.persistence.NestedSqlSession;
 import com.netease.arctic.server.persistence.StatedPersistentBase;
 import com.netease.arctic.server.persistence.mapper.CatalogMetaMapper;
 import com.netease.arctic.server.persistence.mapper.TableMetaMapper;
@@ -215,8 +218,21 @@ public class DefaultTableService extends StatedPersistentBase implements TableSe
 
   @Override
   public List<ServerTableIdentifier> listManagedTables() {
+    LOG.info("getOptimizerTables start listManagedTables");
     checkStarted();
-    return getAs(TableMetaMapper.class, TableMetaMapper::selectAllTableIdentifiers);
+    LOG.info("getOptimizerTables start listManagedTables from system db");
+    try (NestedSqlSession session = beginSession()) {
+      LOG.info("getOptimizerTables begin session");
+      try {
+        TableMetaMapper mapper = getMapper(session, TableMetaMapper.class);
+        LOG.info("getOptimizerTables have get mapper");
+        List<ServerTableIdentifier> result = mapper.selectAllTableIdentifiers();
+        LOG.info("getOptimizerTables have get result");
+        return result;
+      } catch (Throwable t) {
+        throw ArcticRuntimeException.wrap(t, PersistenceException::new);
+      }
+    }
   }
 
   @Override
