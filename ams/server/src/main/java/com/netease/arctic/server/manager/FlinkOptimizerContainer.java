@@ -183,13 +183,14 @@ public class FlinkOptimizerContainer extends AbstractResourceContainer {
     resourceFlinkConf.putToOptions(
         FlinkConfKeys.TASK_MANAGER_TOTAL_PROCESS_MEMORY, taskManagerMemory + "m");
 
-    //load optimizer jar first
+    // load optimizer jar first
     resourceFlinkConf.putToOptions(
         FlinkConfKeys.USER_LIB_FIRST, FlinkConfKeys.USER_LIB_FIRST_DEFAULT);
 
-    //set memory managed fraction
+    // set memory managed fraction
     resourceFlinkConf.putToOptions(
-        FlinkConfKeys.TASK_MANAGER_MEMORY_MANAGED_FRACTION, FlinkConfKeys.TASK_MANAGER_MEMORY_MANAGED_FRACTION_DEFAULT);
+        FlinkConfKeys.TASK_MANAGER_MEMORY_MANAGED_FRACTION,
+        FlinkConfKeys.TASK_MANAGER_MEMORY_MANAGED_FRACTION_DEFAULT);
 
     String flinkAction = target.isApplicationMode() ? "run-application" : "run";
     if (Target.KUBERNETES_APPLICATION == target) {
@@ -426,7 +427,8 @@ public class FlinkOptimizerContainer extends AbstractResourceContainer {
         "taskmanager.memory.process.size";
     public static final String USER_LIB_FIRST = "yarn.per-job-cluster.include-user-jar";
     public static final String USER_LIB_FIRST_DEFAULT = "FIRST";
-    public static final String TASK_MANAGER_MEMORY_MANAGED_FRACTION = "taskmanager.memory.managed.fraction";
+    public static final String TASK_MANAGER_MEMORY_MANAGED_FRACTION =
+        "taskmanager.memory.managed.fraction";
     public static final String TASK_MANAGER_MEMORY_MANAGED_FRACTION_DEFAULT = "0.01";
 
     public static final String KUBERNETES_IMAGE_REF = "kubernetes.container.image";
