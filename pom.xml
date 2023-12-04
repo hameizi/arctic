@@ -130,6 +130,7 @@
         <trino.version>406</trino.version>
         <lucene.version>8.11.2</lucene.version>
         <bitmap.version>0.9.44</bitmap.version>
+        <prometheus.version>0.8.1</prometheus.version>
     </properties>
 
     <dependencyManagement>
